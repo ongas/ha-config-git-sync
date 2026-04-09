@@ -50,8 +50,6 @@ class GitSyncUndoButton(CoordinatorEntity, ButtonEntity):
     """Button to undo/redo the most recent git commit."""
 
     _attr_has_entity_name = True
-    _attr_name = "Undo Last Change"
-    _attr_icon = "mdi:undo"
 
     def __init__(self, coordinator: GitSyncCoordinator, entry: ConfigEntry) -> None:
         """Initialize the button."""
@@ -63,6 +61,23 @@ class GitSyncUndoButton(CoordinatorEntity, ButtonEntity):
             "manufacturer": "Custom",
             "model": "Git Sync",
         }
+
+    @property
+    def _is_redo(self) -> bool:
+        """Return True when the last action was an undo (so next press is redo)."""
+        return bool(
+            self.coordinator.data and self.coordinator.data.get("is_revert_head")
+        )
+
+    @property
+    def name(self) -> str:
+        """Return dynamic name based on undo/redo state."""
+        return "Redo Last Change" if self._is_redo else "Undo Last Change"
+
+    @property
+    def icon(self) -> str:
+        """Return dynamic icon based on undo/redo state."""
+        return "mdi:redo" if self._is_redo else "mdi:undo"
 
     async def async_press(self) -> None:
         """Handle button press — revert the most recent commit."""

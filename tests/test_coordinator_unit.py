@@ -563,3 +563,156 @@ class TestUndo:
             await coord.async_undo()
 
         assert STATUS_PUSHING in statuses_during
+
+
+# ---------------------------------------------------------------------------
+# 8. Undo/redo state tracking
+# ---------------------------------------------------------------------------
+
+class TestUndoState:
+
+    @pytest.mark.asyncio
+    async def test_undo_sets_is_revert_head(self, fake_hass, fake_entry):
+        """After a successful undo, is_revert_head should be True."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        assert coord._is_revert_head is False
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"UI change: test.yaml"),
+            _mock_process(returncode=0),
+            _mock_process(returncode=0, stdout=b"abc1234"),
+            _mock_process(returncode=0),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._is_revert_head is True
+        assert coord.data.get("is_revert_head") is True
+
+    @pytest.mark.asyncio
+    async def test_undo_twice_toggles_is_revert_head(self, fake_hass, fake_entry):
+        """Pressing undo twice should toggle is_revert_head back to False."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        def _undo_calls():
+            return [
+                _mock_process(returncode=0, stdout=b"commit msg"),
+                _mock_process(returncode=0),
+                _mock_process(returncode=0, stdout=b"abc1234"),
+                _mock_process(returncode=0),
+            ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_undo_calls()):
+            await coord.async_undo()
+        assert coord._is_revert_head is True
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_undo_calls()):
+            await coord.async_undo()
+        assert coord._is_revert_head is False
+
+    @pytest.mark.asyncio
+    async def test_push_resets_is_revert_head(self, fake_hass, fake_entry):
+        """A new push after an undo should reset is_revert_head to False."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._is_revert_head = True
+        coord._changed_files = ["file.yaml"]
+
+        calls = [
+            _mock_process(returncode=0),          # git add
+            _mock_process(returncode=0),          # git commit
+            _mock_process(returncode=0, stdout=b"abc1234"),  # rev-parse
+            _mock_process(returncode=0),          # git push
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_push()
+
+        assert coord._is_revert_head is False
+        assert coord.data.get("is_revert_head") is False
+
+    @pytest.mark.asyncio
+    async def test_failed_undo_preserves_revert_state(self, fake_hass, fake_entry):
+        """If undo fails, is_revert_head should not change."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        assert coord._is_revert_head is False
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"some commit"),
+            _mock_process(returncode=1, stderr=b"conflict"),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._is_revert_head is False  # unchanged on failure
+
+    @pytest.mark.asyncio
+    async def test_build_data_includes_is_revert_head(self, fake_hass, fake_entry):
+        """_build_data should expose is_revert_head."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        data = coord._build_data()
+        assert "is_revert_head" in data
+        assert data["is_revert_head"] is False
+
+
+# ---------------------------------------------------------------------------
+# 9. Git operation guard (watcher + poll suppression)
+# ---------------------------------------------------------------------------
+
+class TestGitOperationGuard:
+
+    @pytest.mark.asyncio
+    async def test_poll_skipped_during_git_operation(self, fake_hass, fake_entry):
+        """_async_update_data should return cached data when _git_operating is True."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._git_available = True
+        coord._git_operating = True
+        coord._status = STATUS_PUSHING
+
+        # Should NOT call git at all
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            data = await coord._async_update_data()
+
+        mock_exec.assert_not_called()
+        assert data["status"] == STATUS_PUSHING
+
+    def test_filesystem_event_suppressed_during_git_operation(self, fake_hass, fake_entry):
+        """_on_filesystem_event should be a no-op when _git_operating is True."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._git_operating = True
+        fake_hass.loop = MagicMock()
+
+        coord._on_filesystem_event()
+
+        # Should not schedule a debounced refresh
+        fake_hass.loop.call_later.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_git_operating_cleared_after_push(self, fake_hass, fake_entry):
+        """_git_operating should be False after push completes (success or failure)."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._changed_files = ["file.yaml"]
+
+        add_proc = _mock_process(returncode=1, stderr=b"git add failed")
+
+        with patch("asyncio.create_subprocess_exec", return_value=add_proc):
+            await coord.async_push()
+
+        assert coord._git_operating is False
+
+    @pytest.mark.asyncio
+    async def test_git_operating_cleared_after_undo(self, fake_hass, fake_entry):
+        """_git_operating should be False after undo completes (success or failure)."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"some commit"),
+            _mock_process(returncode=1, stderr=b"conflict"),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._git_operating is False

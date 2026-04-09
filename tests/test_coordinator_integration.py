@@ -507,11 +507,13 @@ class TestRealGitUndo:
         await coord.async_undo()
         after_undo = Path(repo, "configuration.yaml").read_text()
         assert after_undo != new_content
+        assert coord._is_revert_head is True
 
         # Redo (revert the revert)
         await coord.async_undo()
         after_redo = Path(repo, "configuration.yaml").read_text()
         assert after_redo == new_content
+        assert coord._is_revert_head is False
 
     @pytest.mark.asyncio
     async def test_undo_author_info(self, fake_hass, git_repo):

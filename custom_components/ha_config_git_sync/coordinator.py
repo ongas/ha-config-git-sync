@@ -75,6 +75,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._observer: Observer | None = None
         self._debounce_handle: asyncio.TimerHandle | None = None
         self._debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS
+        self._is_revert_head: bool = False
+        self._git_operating: bool = False
 
         scan_interval = entry.data[CONF_SCAN_INTERVAL]
 
@@ -126,6 +128,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
     def _on_filesystem_event(self) -> None:
         """Handle a filesystem event (called from watcher thread via loop)."""
+        if self._git_operating:
+            return
         # Cancel any pending debounce timer
         if self._debounce_handle is not None:
             self._debounce_handle.cancel()
@@ -137,6 +141,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict:
         """Poll git status."""
+        if self._git_operating:
+            return self._build_data()
         if not self._git_available:
             self._status = STATUS_ERROR
             self._last_error = "git binary not available"
@@ -184,6 +190,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             "last_push_commit": self._last_push_commit,
             "last_error": self._last_error,
             "last_check": dt_util.utcnow().isoformat(),
+            "is_revert_head": self._is_revert_head,
         }
 
     async def _maybe_notify(self) -> None:
@@ -238,6 +245,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             return
 
         self._status = STATUS_PUSHING
+        self._git_operating = True
         self.async_set_updated_data(self._build_data())
 
         try:
@@ -286,6 +294,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_push_commit = commit_hash
             self._last_error = None
             self._last_notification = None  # Reset cooldown
+            self._is_revert_head = False
 
             _LOGGER.info("Successfully pushed commit %s: %s", commit_hash, message)
 
@@ -302,6 +311,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             await self._notify_result("Git Push Failed", str(err))
 
         finally:
+            self._git_operating = False
             self.async_set_updated_data(self._build_data())
 
     async def async_undo(self) -> None:
@@ -311,6 +321,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         Making a new push after an undo starts a fresh history.
         """
         self._status = STATUS_PUSHING
+        self._git_operating = True
         self.async_set_updated_data(self._build_data())
 
         try:
@@ -355,6 +366,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_push = dt_util.utcnow().isoformat()
             self._last_push_commit = commit_hash
             self._last_error = None
+            self._is_revert_head = not self._is_revert_head
 
             _LOGGER.info("Undo successful: reverted '%s'", head_subject)
 
@@ -370,6 +382,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             await self._notify_result("Undo Failed", str(err))
 
         finally:
+            self._git_operating = False
             self.async_set_updated_data(self._build_data())
 
     async def async_handle_action(self, action: str) -> None:
