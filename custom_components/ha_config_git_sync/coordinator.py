@@ -7,6 +7,9 @@ import logging
 import os
 from datetime import timedelta
 
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -23,6 +26,7 @@ from .const import (
     CONF_REPO_PATH,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
+    DEFAULT_DEBOUNCE_SECONDS,
     DOMAIN,
     STATUS_CLEAN,
     STATUS_ERROR,
@@ -31,6 +35,20 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _GitIgnoreAwareHandler(FileSystemEventHandler):
+    """File system event handler that ignores .git/ directory changes."""
+
+    def __init__(self, coordinator, loop):
+        self._coordinator = coordinator
+        self._loop = loop
+
+    def on_any_event(self, event):
+        # Ignore changes inside .git/ directory
+        if "/.git/" in event.src_path or event.src_path.endswith("/.git"):
+            return
+        self._loop.call_soon_threadsafe(self._coordinator._on_filesystem_event)
 
 
 class GitSyncCoordinator(DataUpdateCoordinator):
@@ -54,6 +72,9 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._last_push_commit: str | None = None
         self._last_error: str | None = None
         self._git_available: bool = False
+        self._observer: Observer | None = None
+        self._debounce_handle: asyncio.TimerHandle | None = None
+        self._debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS
 
         scan_interval = entry.data[CONF_SCAN_INTERVAL]
 
@@ -74,6 +95,44 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         # Ensure safe.directory is set (Docker ownership mismatch)
         await self._run_git(
             "config", "--global", "--add", "safe.directory", self._repo_path
+        )
+
+    def start_watcher(self) -> None:
+        """Start the filesystem watcher for instant change detection."""
+        if self._observer is not None:
+            return
+
+        try:
+            handler = _GitIgnoreAwareHandler(self, self.hass.loop)
+            self._observer = Observer()
+            self._observer.schedule(handler, self._repo_path, recursive=True)
+            self._observer.daemon = True
+            self._observer.start()
+            _LOGGER.info("File watcher started on %s", self._repo_path)
+        except Exception:
+            _LOGGER.exception("Failed to start file watcher, falling back to polling")
+            self._observer = None
+
+    def stop_watcher(self) -> None:
+        """Stop the filesystem watcher."""
+        if self._observer is not None:
+            self._observer.stop()
+            self._observer.join(timeout=5)
+            self._observer = None
+            _LOGGER.debug("File watcher stopped")
+        if self._debounce_handle is not None:
+            self._debounce_handle.cancel()
+            self._debounce_handle = None
+
+    def _on_filesystem_event(self) -> None:
+        """Handle a filesystem event (called from watcher thread via loop)."""
+        # Cancel any pending debounce timer
+        if self._debounce_handle is not None:
+            self._debounce_handle.cancel()
+        # Schedule a debounced refresh
+        self._debounce_handle = self.hass.loop.call_later(
+            self._debounce_seconds,
+            lambda: self.hass.async_create_task(self.async_request_refresh()),
         )
 
     async def _async_update_data(self) -> dict:

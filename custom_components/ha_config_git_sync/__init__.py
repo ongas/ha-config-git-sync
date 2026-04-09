@@ -22,6 +22,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
+    # Start filesystem watcher for instant change detection
+    coordinator.start_watcher()
+    entry.async_on_unload(coordinator.stop_watcher)
+
     # Listen for actionable notification responses
     async def handle_notification_action(event: Event) -> None:
         """Handle mobile_app notification action."""

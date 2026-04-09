@@ -21,8 +21,9 @@ DEFAULT_REMOTE = "origin"
 DEFAULT_SSH_KEY_PATH = "/config/.ssh/id_ed25519"
 DEFAULT_COMMIT_AUTHOR_NAME = "HA Config Sync"
 DEFAULT_COMMIT_AUTHOR_EMAIL = "ha-config-sync@local"
-DEFAULT_SCAN_INTERVAL = 5  # minutes
+DEFAULT_SCAN_INTERVAL = 5  # minutes (fallback poll; primary is inotify)
 DEFAULT_NOTIFICATION_COOLDOWN = 30  # minutes
+DEFAULT_DEBOUNCE_SECONDS = 5  # debounce rapid filesystem events
 
 # Notification actions
 ACTION_PUSH = "HA_GIT_SYNC_PUSH"

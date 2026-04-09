@@ -1,6 +1,6 @@
 [project]
 name = "ha-config-git-sync"
-version = "1.0.2"
+version = "1.1.0"
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]

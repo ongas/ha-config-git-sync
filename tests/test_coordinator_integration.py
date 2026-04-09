@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -343,3 +345,103 @@ class TestEdgeCases:
 
         await coord.async_push()
         assert coord._status == STATUS_CLEAN
+
+
+# ---------------------------------------------------------------------------
+# 4. Filesystem watcher
+# ---------------------------------------------------------------------------
+
+class TestFileWatcher:
+
+    def test_watcher_starts_and_stops(self, fake_hass, git_repo):
+        """Watcher should start an observer and stop cleanly."""
+        entry = _make_entry(git_repo["repo_path"])
+        coord = GitSyncCoordinator(fake_hass, entry)
+
+        coord.start_watcher()
+        assert coord._observer is not None
+        assert coord._observer.is_alive()
+
+        coord.stop_watcher()
+        assert coord._observer is None
+
+    def test_watcher_double_start_is_noop(self, fake_hass, git_repo):
+        """Calling start_watcher twice should not create a second observer."""
+        entry = _make_entry(git_repo["repo_path"])
+        coord = GitSyncCoordinator(fake_hass, entry)
+
+        coord.start_watcher()
+        first_observer = coord._observer
+        coord.start_watcher()
+        assert coord._observer is first_observer
+
+        coord.stop_watcher()
+
+    def test_watcher_stop_without_start(self, fake_hass, git_repo):
+        """Stopping a watcher that was never started should not error."""
+        entry = _make_entry(git_repo["repo_path"])
+        coord = GitSyncCoordinator(fake_hass, entry)
+        coord.stop_watcher()  # Should not raise
+
+    def test_watcher_detects_file_change(self, fake_hass, git_repo):
+        """Watcher should fire the handler callback when a file changes."""
+        from watchdog.observers import Observer
+        from custom_components.ha_config_git_sync.coordinator import _GitIgnoreAwareHandler
+        import threading
+
+        repo = git_repo["repo_path"]
+        event_fired = threading.Event()
+
+        class _TrackingHandler(_GitIgnoreAwareHandler):
+            def on_any_event(self, event):
+                if "/.git/" not in event.src_path:
+                    event_fired.set()
+
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+
+        observer = Observer()
+        handler = _TrackingHandler(coord, MagicMock())
+        observer.schedule(handler, repo, recursive=True)
+        observer.daemon = True
+        observer.start()
+        try:
+            time.sleep(0.3)
+            Path(repo, "configuration.yaml").write_text("changed!\n")
+            assert event_fired.wait(timeout=5), "Watcher did not detect file change"
+        finally:
+            observer.stop()
+            observer.join(timeout=5)
+
+    def test_watcher_ignores_git_directory(self, fake_hass, git_repo):
+        """Changes inside .git/ should not trigger events."""
+        from watchdog.observers import Observer
+        from custom_components.ha_config_git_sync.coordinator import _GitIgnoreAwareHandler
+        import threading
+
+        repo = git_repo["repo_path"]
+        event_fired = threading.Event()
+
+        class _TrackingHandler(_GitIgnoreAwareHandler):
+            def on_any_event(self, event):
+                # Call parent which filters .git/
+                if "/.git/" not in event.src_path and not event.src_path.endswith("/.git"):
+                    event_fired.set()
+
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+
+        observer = Observer()
+        handler = _TrackingHandler(coord, MagicMock())
+        observer.schedule(handler, repo, recursive=True)
+        observer.daemon = True
+        observer.start()
+        try:
+            time.sleep(0.3)
+            # Write inside .git/ directory
+            Path(repo, ".git", "test_file").write_text("should be ignored\n")
+            # Wait briefly — should NOT fire
+            assert not event_fired.wait(timeout=1), "Watcher should ignore .git/ changes"
+        finally:
+            observer.stop()
+            observer.join(timeout=5)
