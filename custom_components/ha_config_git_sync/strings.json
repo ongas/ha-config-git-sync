@@ -1,0 +1,51 @@
+{
+  "title": "HA Config Git Sync",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Repository Settings",
+        "description": "Configure the git repository for config synchronisation.",
+        "data": {
+          "repo_path": "Repository path",
+          "branch": "Branch",
+          "remote": "Remote name",
+          "ssh_key_path": "SSH private key path (for push)"
+        }
+      },
+      "settings": {
+        "title": "Notification & Commit Settings",
+        "description": "Configure how changes are committed and how you are notified.",
+        "data": {
+          "commit_author_name": "Commit author name",
+          "commit_author_email": "Commit author email",
+          "notify_service": "Notify service (e.g. mobile_app_mobile_pixel_6)",
+          "scan_interval": "Scan interval (minutes)",
+          "notification_cooldown": "Notification cooldown (minutes)"
+        }
+      }
+    },
+    "error": {
+      "git_not_found": "git binary not found in the HA container",
+      "not_git_repo": "The specified path is not a git repository",
+      "ssh_key_not_found": "SSH key file not found at the specified path"
+    },
+    "abort": {
+      "already_configured": "This repository is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Git Sync",
+        "data": {
+          "ssh_key_path": "SSH private key path",
+          "commit_author_name": "Commit author name",
+          "commit_author_email": "Commit author email",
+          "notify_service": "Notify service",
+          "scan_interval": "Scan interval (minutes)",
+          "notification_cooldown": "Notification cooldown (minutes)"
+        }
+      }
+    }
+  }
+}

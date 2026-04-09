@@ -1,0 +1,6 @@
+{
+  "name": "HA Config Git Sync",
+  "render_readme": true,
+  "domains": ["sensor", "binary_sensor", "button"],
+  "homeassistant": "2024.1.0"
+}

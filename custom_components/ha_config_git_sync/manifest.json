@@ -1,0 +1,11 @@
+{
+  "domain": "ha_config_git_sync",
+  "name": "HA Config Git Sync",
+  "documentation": "https://github.com/ongas/ha-config-git-sync",
+  "issue_tracker": "https://github.com/ongas/ha-config-git-sync/issues",
+  "codeowners": ["@ongas"],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "version": "1.0.0",
+  "requirements": []
+}
