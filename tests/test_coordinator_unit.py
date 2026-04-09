@@ -434,3 +434,132 @@ class TestRunGit:
 
         _, kwargs = mock_exec.call_args
         assert kwargs["env"]["GIT_AUTHOR_NAME"] == "Custom"
+
+
+# ---------------------------------------------------------------------------
+# 7. Undo / redo
+# ---------------------------------------------------------------------------
+
+class TestUndo:
+
+    @pytest.mark.asyncio
+    async def test_undo_reverts_and_pushes(self, fake_hass, fake_entry):
+        """Successful undo should call revert HEAD, rev-parse, and push."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._status = STATUS_CLEAN
+
+        calls = [
+            # git log -1 --format=%s
+            _mock_process(returncode=0, stdout=b"UI change: automations.yaml"),
+            # git revert HEAD --no-edit
+            _mock_process(returncode=0),
+            # git rev-parse --short HEAD
+            _mock_process(returncode=0, stdout=b"abc1234"),
+            # git push origin main
+            _mock_process(returncode=0),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._status == STATUS_CLEAN
+        assert coord._last_push_commit == "abc1234"
+        assert coord._last_error is None
+
+    @pytest.mark.asyncio
+    async def test_undo_revert_failure(self, fake_hass, fake_entry):
+        """If git revert fails, status should be error."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            # git log -1 --format=%s
+            _mock_process(returncode=0, stdout=b"some commit"),
+            # git revert HEAD --no-edit  (fails)
+            _mock_process(returncode=1, stderr=b"conflict"),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._status == STATUS_ERROR
+        assert "git revert failed" in coord._last_error
+
+    @pytest.mark.asyncio
+    async def test_undo_push_failure(self, fake_hass, fake_entry):
+        """If push after revert fails, status should be error."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"some commit"),
+            _mock_process(returncode=0),  # revert ok
+            _mock_process(returncode=0, stdout=b"abc1234"),  # rev-parse
+            _mock_process(returncode=1, stderr=b"rejected"),  # push fails
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._status == STATUS_ERROR
+        assert "git push failed" in coord._last_error
+
+    @pytest.mark.asyncio
+    async def test_undo_log_failure(self, fake_hass, fake_entry):
+        """If git log fails, undo should error before revert."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=1, stderr=b"bad revision"),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._status == STATUS_ERROR
+        assert "git log failed" in coord._last_error
+
+    @pytest.mark.asyncio
+    async def test_undo_sends_notification(self, fake_hass, fake_entry):
+        """Successful undo should call _notify_result."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"UI change: test.yaml"),
+            _mock_process(returncode=0),
+            _mock_process(returncode=0, stdout=b"def5678"),
+            _mock_process(returncode=0),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls), \
+             patch.object(coord, "_notify_result", new_callable=AsyncMock) as mock_notify:
+            await coord.async_undo()
+
+        mock_notify.assert_called_once()
+        title, body = mock_notify.call_args[0]
+        assert "Reverted" in title
+        assert "UI change: test.yaml" in body
+
+    @pytest.mark.asyncio
+    async def test_undo_sets_pushing_status_during_operation(self, fake_hass, fake_entry):
+        """Status should be PUSHING during the undo operation."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        statuses_during = []
+
+        original_build = coord._build_data
+
+        def capturing_build():
+            statuses_during.append(coord._status)
+            return original_build()
+
+        coord._build_data = capturing_build
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"commit msg"),
+            _mock_process(returncode=0),
+            _mock_process(returncode=0, stdout=b"aaa1111"),
+            _mock_process(returncode=0),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert STATUS_PUSHING in statuses_during

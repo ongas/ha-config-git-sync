@@ -5,12 +5,15 @@ A Home Assistant custom integration that detects configuration changes made via 
 ## Features
 
 - **Polls git status** on a configurable interval (default: every 5 minutes)
+- **Instant change detection** — uses filesystem monitoring (inotify) to detect changes immediately, without waiting for the next poll
 - **Actionable phone notifications** — tap "Push to Git" or "Dismiss" directly from the notification
 - **Manual push button** — push from the HA dashboard or automations
+- **Undo / redo button** — reverts the last commit with `git revert HEAD`; press again to redo (toggle)
 - **Dashboard entities:**
   - `sensor.ha_config_git_sync_status` — clean / pending_changes / pushing / error
   - `binary_sensor.ha_config_git_sync_pending_changes` — on when uncommitted changes exist
   - `button.ha_config_git_sync_push_to_git` — manual push trigger
+  - `button.ha_config_git_sync_undo_last_change` — undo / redo toggle
 - **Configurable via UI** — Settings → Integrations → HA Config Git Sync → Configure
 
 ## Prerequisites
@@ -84,7 +87,7 @@ You edit an automation in the HA UI
     ↓
 HA writes to automations.yaml on disk
     ↓
-Integration detects uncommitted changes (git status)
+Integration detects uncommitted changes (git status + filesystem watcher)
     ↓
 Sends actionable notification to your phone
     ↓
@@ -104,6 +107,7 @@ Run "git pull" locally to sync your dev machine
 | `sensor.ha_config_git_sync_status` | Sensor | Status: `clean`, `pending_changes`, `pushing`, `error` |
 | `binary_sensor.ha_config_git_sync_pending_changes` | Binary Sensor | ON when uncommitted changes exist |
 | `button.ha_config_git_sync_push_to_git` | Button | Manually trigger a git push |
+| `button.ha_config_git_sync_undo_last_change` | Button | Undo (or redo) the last commit |
 
 ### Status Sensor Attributes
 
@@ -113,6 +117,16 @@ Run "git pull" locally to sync your dev machine
 - `last_push_commit` — short hash of last push commit
 - `last_check` — timestamp of last git status check
 - `last_error` — last error message (if any)
+
+## Undo / Redo
+
+The **Undo Last Change** button runs `git revert HEAD --no-edit`, which creates a new commit that reverses the previous one. It then pushes the result automatically.
+
+- **First press** — undoes your last change
+- **Second press** — redoes it (reverts the revert)
+- Making a new push after an undo starts fresh history
+
+This is the standard git approach: every action is recorded and nothing is ever lost.
 
 ## Workflow with Git Pull
 

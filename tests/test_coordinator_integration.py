@@ -445,3 +445,88 @@ class TestFileWatcher:
         finally:
             observer.stop()
             observer.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# 5. Undo / redo against real git
+# ---------------------------------------------------------------------------
+
+class TestRealGitUndo:
+
+    @pytest.mark.asyncio
+    async def test_undo_reverts_last_commit(self, fake_hass, git_repo):
+        """Undo should create a revert commit and push it."""
+        repo = git_repo["repo_path"]
+        remote = git_repo["remote_path"]
+
+        # Make a change and push it
+        Path(repo, "configuration.yaml").write_text("changed for undo test\n")
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+        await coord._async_update_data()
+        await coord.async_push()
+
+        original_content = Path(repo, "configuration.yaml").read_text()
+        commit_before_undo = _git(repo, "rev-parse", "HEAD")
+
+        # Undo
+        await coord.async_undo()
+
+        commit_after_undo = _git(repo, "rev-parse", "HEAD")
+        assert commit_after_undo != commit_before_undo
+        assert coord._status == STATUS_CLEAN
+
+        # The revert commit message should reference the original
+        log_msg = _git(repo, "log", "-1", "--format=%s")
+        assert "Revert" in log_msg
+
+        # Verify file content reverted (original was "homeassistant:\n")
+        reverted_content = Path(repo, "configuration.yaml").read_text()
+        assert reverted_content != original_content
+
+        # Verify revert reached the remote
+        remote_log = _git(remote, "log", "--oneline", "-1", "main")
+        assert "Revert" in remote_log
+
+    @pytest.mark.asyncio
+    async def test_undo_twice_is_redo(self, fake_hass, git_repo):
+        """Undoing twice should restore the original change (toggle)."""
+        repo = git_repo["repo_path"]
+
+        # Make a change and push
+        new_content = "toggle test content\n"
+        Path(repo, "configuration.yaml").write_text(new_content)
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+        await coord._async_update_data()
+        await coord.async_push()
+
+        # Undo (revert the change)
+        await coord.async_undo()
+        after_undo = Path(repo, "configuration.yaml").read_text()
+        assert after_undo != new_content
+
+        # Redo (revert the revert)
+        await coord.async_undo()
+        after_redo = Path(repo, "configuration.yaml").read_text()
+        assert after_redo == new_content
+
+    @pytest.mark.asyncio
+    async def test_undo_author_info(self, fake_hass, git_repo):
+        """Revert commit should use the configured author."""
+        repo = git_repo["repo_path"]
+
+        Path(repo, "configuration.yaml").write_text("author test\n")
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+        await coord._async_update_data()
+        await coord.async_push()
+
+        await coord.async_undo()
+
+        log = _git(repo, "log", "-1", "--format=%an <%ae>")
+        assert "Integration Test" in log
+        assert "test@integration.local" in log

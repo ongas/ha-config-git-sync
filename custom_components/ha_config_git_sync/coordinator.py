@@ -304,6 +304,74 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         finally:
             self.async_set_updated_data(self._build_data())
 
+    async def async_undo(self) -> None:
+        """Undo/redo: revert the most recent commit with git revert HEAD.
+
+        Acts as a toggle — first press undoes, second press redoes, etc.
+        Making a new push after an undo starts a fresh history.
+        """
+        self._status = STATUS_PUSHING
+        self.async_set_updated_data(self._build_data())
+
+        try:
+            # Get the current HEAD commit subject for the notification
+            rc, head_subject, stderr = await self._run_git(
+                "log", "-1", "--format=%s"
+            )
+            if rc != 0:
+                raise RuntimeError(f"git log failed: {stderr}")
+
+            # Revert HEAD with our author info
+            env = {
+                "GIT_AUTHOR_NAME": self._author_name,
+                "GIT_AUTHOR_EMAIL": self._author_email,
+                "GIT_COMMITTER_NAME": self._author_name,
+                "GIT_COMMITTER_EMAIL": self._author_email,
+            }
+            rc, _, stderr = await self._run_git(
+                "revert", "HEAD", "--no-edit", env=env
+            )
+            if rc != 0:
+                raise RuntimeError(f"git revert failed: {stderr}")
+
+            # Get new commit hash
+            _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
+
+            # Push
+            ssh_cmd = (
+                f"ssh -i {self._ssh_key_path} "
+                "-o StrictHostKeyChecking=no "
+                "-o UserKnownHostsFile=/dev/null"
+            )
+            push_env = {"GIT_SSH_COMMAND": ssh_cmd}
+            rc, _, stderr = await self._run_git(
+                "push", self._remote, self._branch, env=push_env
+            )
+            if rc != 0:
+                raise RuntimeError(f"git push failed: {stderr}")
+
+            self._status = STATUS_CLEAN
+            self._changed_files = []
+            self._last_push = dt_util.utcnow().isoformat()
+            self._last_push_commit = commit_hash
+            self._last_error = None
+
+            _LOGGER.info("Undo successful: reverted '%s'", head_subject)
+
+            await self._notify_result(
+                "Config Reverted",
+                f"Undid: {head_subject}",
+            )
+
+        except Exception as err:
+            self._status = STATUS_ERROR
+            self._last_error = str(err)
+            _LOGGER.error("Undo failed: %s", err)
+            await self._notify_result("Undo Failed", str(err))
+
+        finally:
+            self.async_set_updated_data(self._build_data())
+
     async def async_handle_action(self, action: str) -> None:
         """Handle a notification action response."""
         if action == ACTION_PUSH:

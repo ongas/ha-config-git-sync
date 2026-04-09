@@ -17,7 +17,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up buttons."""
     coordinator: GitSyncCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([GitSyncPushButton(coordinator, entry)])
+    async_add_entities([
+        GitSyncPushButton(coordinator, entry),
+        GitSyncUndoButton(coordinator, entry),
+    ])
 
 
 class GitSyncPushButton(CoordinatorEntity, ButtonEntity):
@@ -41,3 +44,26 @@ class GitSyncPushButton(CoordinatorEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Handle button press — push changes to git."""
         await self.coordinator.async_push()
+
+
+class GitSyncUndoButton(CoordinatorEntity, ButtonEntity):
+    """Button to undo/redo the most recent git commit."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Undo Last Change"
+    _attr_icon = "mdi:undo"
+
+    def __init__(self, coordinator: GitSyncCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the button."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_undo"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "HA Config Git Sync",
+            "manufacturer": "Custom",
+            "model": "Git Sync",
+        }
+
+    async def async_press(self) -> None:
+        """Handle button press — revert the most recent commit."""
+        await self.coordinator.async_undo()
