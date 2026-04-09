@@ -93,10 +93,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if stdout:
                 files = []
                 for line in stdout.split("\n"):
-                    line = line.strip()
-                    if line:
-                        # git status --porcelain format: "XY filename"
-                        files.append(line[3:] if len(line) > 3 else line)
+                    if not line or len(line) < 4:
+                        continue
+                    # git status --porcelain format: "XY filename"
+                    # X=index status, Y=worktree status, then a space
+                    files.append(line[3:])
                 self._changed_files = files
                 if self._status != STATUS_PUSHING:
                     self._status = STATUS_PENDING
@@ -279,16 +280,19 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         if env:
             cmd_env.update(env)
 
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            *args,
-            cwd=self._repo_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=cmd_env,
-        )
-        stdout, stderr = await process.communicate()
-        return process.returncode, stdout.decode().strip(), stderr.decode().strip()
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                *args,
+                cwd=self._repo_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=cmd_env,
+            )
+            stdout, stderr = await process.communicate()
+            return process.returncode, stdout.decode().rstrip(), stderr.decode().strip()
+        except (FileNotFoundError, OSError) as err:
+            return 1, "", str(err)
 
     async def _check_git_available(self) -> bool:
         """Check if git binary is available."""

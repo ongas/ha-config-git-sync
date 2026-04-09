@@ -1,0 +1,8 @@
+[project]
+name = "ha-config-git-sync"
+version = "1.0.2"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
