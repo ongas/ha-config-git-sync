@@ -37,11 +37,51 @@ class _FakeUpdateFailed(Exception):
     pass
 
 
+class _FakeConfigFlow:
+    """Minimal stand-in for homeassistant.config_entries.ConfigFlow."""
+
+    _unique_id = None
+
+    def __init_subclass__(cls, domain=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.domain = domain
+
+    def async_show_form(self, **kwargs):
+        return {"type": "form", **kwargs}
+
+    def async_create_entry(self, **kwargs):
+        return {"type": "create_entry", **kwargs}
+
+    async def async_set_unique_id(self, unique_id):
+        self._unique_id = unique_id
+
+    def _abort_if_unique_id_configured(self):
+        pass
+
+
+class _FakeOptionsFlow:
+    """Minimal stand-in for homeassistant.config_entries.OptionsFlow."""
+
+    def async_show_form(self, **kwargs):
+        return {"type": "form", **kwargs}
+
+    def async_create_entry(self, **kwargs):
+        return {"type": "create_entry", **kwargs}
+
+
+def _callback_passthrough(fn):
+    """Passthrough for the @callback decorator."""
+    return fn
+
+
 # Patch HA imports before anything in custom_components is imported
 _ha_mocks = {
     "homeassistant": MagicMock(),
-    "homeassistant.core": MagicMock(),
-    "homeassistant.config_entries": MagicMock(),
+    "homeassistant.core": MagicMock(callback=_callback_passthrough),
+    "homeassistant.config_entries": MagicMock(
+        ConfigFlow=_FakeConfigFlow,
+        OptionsFlow=_FakeOptionsFlow,
+    ),
     "homeassistant.helpers": MagicMock(),
     "homeassistant.helpers.entity_platform": MagicMock(),
     "homeassistant.helpers.update_coordinator": MagicMock(
@@ -55,7 +95,7 @@ _ha_mocks = {
     "homeassistant.components.sensor": MagicMock(),
     "homeassistant.components.binary_sensor": MagicMock(),
     "homeassistant.components.button": MagicMock(),
-    "homeassistant.data_entry_flow": MagicMock(),
+    "homeassistant.data_entry_flow": MagicMock(FlowResult=dict),
 }
 
 import sys

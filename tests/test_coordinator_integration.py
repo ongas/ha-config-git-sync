@@ -360,9 +360,35 @@ class TestFileWatcher:
 
         coord.start_watcher()
         assert coord._observer is not None
-        assert coord._observer.is_alive()
+        # Observer start is offloaded to executor; verify it was scheduled
+        fake_hass.loop.run_in_executor.assert_called_once()
 
         coord.stop_watcher()
+        assert coord._observer is None
+
+    def test_watcher_uses_executor_for_start(self, fake_hass, git_repo):
+        """start_watcher must offload observer.start() to a thread executor."""
+        entry = _make_entry(git_repo["repo_path"])
+        coord = GitSyncCoordinator(fake_hass, entry)
+
+        coord.start_watcher()
+
+        fake_hass.loop.run_in_executor.assert_called_once()
+        args = fake_hass.loop.run_in_executor.call_args[0]
+        assert args[0] is None  # default executor
+        assert callable(args[1])  # observer.start method
+
+    def test_watcher_uses_executor_for_stop(self, fake_hass, git_repo):
+        """stop_watcher must offload observer.stop()/join() to a thread executor."""
+        entry = _make_entry(git_repo["repo_path"])
+        coord = GitSyncCoordinator(fake_hass, entry)
+
+        coord.start_watcher()
+        fake_hass.loop.run_in_executor.reset_mock()
+
+        coord.stop_watcher()
+        # stop_watcher should also use executor
+        fake_hass.loop.run_in_executor.assert_called_once()
         assert coord._observer is None
 
     def test_watcher_double_start_is_noop(self, fake_hass, git_repo):

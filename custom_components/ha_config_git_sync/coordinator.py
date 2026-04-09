@@ -109,7 +109,9 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._observer = Observer()
             self._observer.schedule(handler, self._repo_path, recursive=True)
             self._observer.daemon = True
-            self._observer.start()
+            # Run observer.start() in thread executor to avoid blocking event loop
+            # watchdog's Observer.start() uses os.walk() which blocks
+            self.hass.loop.run_in_executor(None, self._observer.start)
             _LOGGER.info("File watcher started on %s", self._repo_path)
         except Exception:
             _LOGGER.exception("Failed to start file watcher, falling back to polling")
@@ -118,8 +120,15 @@ class GitSyncCoordinator(DataUpdateCoordinator):
     def stop_watcher(self) -> None:
         """Stop the filesystem watcher."""
         if self._observer is not None:
-            self._observer.stop()
-            self._observer.join(timeout=5)
+            # Schedule observer stop/join in thread executor to avoid blocking event loop
+            def _stop_observer():
+                try:
+                    self._observer.stop()
+                    self._observer.join(timeout=5)
+                except Exception:
+                    _LOGGER.exception("Error stopping observer")
+            
+            self.hass.loop.run_in_executor(None, _stop_observer)
             self._observer = None
             _LOGGER.debug("File watcher stopped")
         if self._debounce_handle is not None:

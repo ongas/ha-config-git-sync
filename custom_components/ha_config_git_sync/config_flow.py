@@ -166,8 +166,16 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage options."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            # Validate SSH key path if provided
+            ssh_key = user_input.get(CONF_SSH_KEY_PATH, "")
+            if ssh_key and not os.path.isfile(ssh_key):
+                errors[CONF_SSH_KEY_PATH] = "ssh_key_not_found"
+            
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
 
         current = self.config_entry.data
 
@@ -207,4 +215,5 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
                     ): vol.All(int, vol.Range(min=5, max=1440)),
                 }
             ),
+            errors=errors,
         )
