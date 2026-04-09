@@ -122,7 +122,7 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         """Get the options flow handler."""
-        return HAConfigGitSyncOptionsFlow(config_entry)
+        return HAConfigGitSyncOptionsFlow()
 
     async def _check_git_available(self) -> bool:
         """Check if git binary is available."""
@@ -157,10 +157,6 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class HAConfigGitSyncOptionsFlow(OptionsFlow):
     """Handle options for HA Config Git Sync."""
-
-    def __init__(self, config_entry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

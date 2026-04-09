@@ -60,7 +60,13 @@ class _FakeConfigFlow:
 
 
 class _FakeOptionsFlow:
-    """Minimal stand-in for homeassistant.config_entries.OptionsFlow."""
+    """Minimal stand-in for homeassistant.config_entries.OptionsFlow.
+
+    In HA 2026+, self.config_entry is set automatically by the base class
+    before async_step_init is called. No __init__(config_entry) needed.
+    """
+
+    config_entry = None  # Set externally before calling steps
 
     def async_show_form(self, **kwargs):
         return {"type": "form", **kwargs}

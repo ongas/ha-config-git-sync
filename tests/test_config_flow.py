@@ -217,11 +217,17 @@ class TestOptionsFlow:
             entry.data.update(overrides)
         return entry
 
+    def _make_flow(self, overrides=None):
+        """Build an options flow with config_entry set (HA 2026+ pattern)."""
+        entry = self._make_config_entry(overrides)
+        flow = HAConfigGitSyncOptionsFlow()
+        flow.config_entry = entry
+        return flow
+
     @pytest.mark.asyncio
     async def test_shows_form_on_initial_load(self):
         """Opening options should show form pre-filled with current values."""
-        entry = self._make_config_entry()
-        flow = HAConfigGitSyncOptionsFlow(entry)
+        flow = self._make_flow()
 
         result = await flow.async_step_init(user_input=None)
 
@@ -237,8 +243,7 @@ class TestOptionsFlow:
     @pytest.mark.asyncio
     async def test_saves_updated_options(self):
         """Submitting valid input should create an entry."""
-        entry = self._make_config_entry()
-        flow = HAConfigGitSyncOptionsFlow(entry)
+        flow = self._make_flow()
 
         new_settings = {
             CONF_SSH_KEY_PATH: "/config/.ssh/new_key",
@@ -258,8 +263,7 @@ class TestOptionsFlow:
     @pytest.mark.asyncio
     async def test_error_ssh_key_not_found(self):
         """If new SSH key path doesn't exist, show error."""
-        entry = self._make_config_entry()
-        flow = HAConfigGitSyncOptionsFlow(entry)
+        flow = self._make_flow()
 
         new_settings = {
             CONF_SSH_KEY_PATH: "/nonexistent/key",
@@ -279,8 +283,7 @@ class TestOptionsFlow:
     @pytest.mark.asyncio
     async def test_empty_ssh_key_skips_validation(self):
         """Empty SSH key path should not trigger validation error."""
-        entry = self._make_config_entry()
-        flow = HAConfigGitSyncOptionsFlow(entry)
+        flow = self._make_flow()
 
         new_settings = {
             CONF_SSH_KEY_PATH: "",
@@ -297,11 +300,10 @@ class TestOptionsFlow:
     @pytest.mark.asyncio
     async def test_form_defaults_from_current_config(self):
         """Form defaults should reflect the current config entry data."""
-        entry = self._make_config_entry({
+        flow = self._make_flow({
             CONF_SCAN_INTERVAL: 15,
             CONF_NOTIFICATION_COOLDOWN: 120,
         })
-        flow = HAConfigGitSyncOptionsFlow(entry)
 
         result = await flow.async_step_init(user_input=None)
 
@@ -321,7 +323,12 @@ class TestOptionsFlow:
         options_flow = HAConfigGitSyncConfigFlow.async_get_options_flow(entry)
 
         assert isinstance(options_flow, HAConfigGitSyncOptionsFlow)
-        assert options_flow.config_entry is entry
+
+    @pytest.mark.asyncio
+    async def test_options_flow_no_init_args(self):
+        """OptionsFlow must not require config_entry in __init__ (HA 2026+)."""
+        flow = HAConfigGitSyncOptionsFlow()
+        assert hasattr(flow, 'async_step_init')
 
 
 # ---------------------------------------------------------------------------
