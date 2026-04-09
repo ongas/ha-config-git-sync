@@ -18,7 +18,7 @@
         "data": {
           "commit_author_name": "Commit author name",
           "commit_author_email": "Commit author email",
-          "notify_service": "Notify service (e.g. mobile_app_mobile_pixel_6)",
+          "notify_service": "Notify service (e.g. mobile_app)",
           "scan_interval": "Scan interval (minutes)",
           "notification_cooldown": "Notification cooldown (minutes)"
         }
