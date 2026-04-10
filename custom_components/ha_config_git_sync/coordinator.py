@@ -77,6 +77,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS
         self._is_revert_head: bool = False
         self._git_operating: bool = False
+        self._last_activity: str | None = None
 
         scan_interval = entry.data[CONF_SCAN_INTERVAL]
 
@@ -200,6 +201,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             "last_error": self._last_error,
             "last_check": dt_util.utcnow().isoformat(),
             "is_revert_head": self._is_revert_head,
+            "last_activity": self._last_activity,
         }
 
     async def _maybe_notify(self) -> None:
@@ -305,6 +307,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_notification = None  # Reset cooldown
             self._is_revert_head = False
 
+            self._last_activity = f"Pushed {commit_hash}: {files_str}"
             _LOGGER.info("Successfully pushed commit %s: %s", commit_hash, message)
 
             await self._notify_result(
@@ -315,6 +318,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         except Exception as err:
             self._status = STATUS_ERROR
             self._last_error = str(err)
+            self._last_activity = f"Push failed: {err}"
             _LOGGER.error("Git push failed: %s", err)
 
             await self._notify_result("Git Push Failed", str(err))
@@ -375,8 +379,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_push = dt_util.utcnow().isoformat()
             self._last_push_commit = commit_hash
             self._last_error = None
-            self._is_revert_head = not self._is_revert_head
 
+            action = "Redo" if self._is_revert_head else "Undo"
+            self._is_revert_head = not self._is_revert_head
+            self._last_activity = f"{action} & reloaded: {head_subject}"
             _LOGGER.info("Undo successful: reverted '%s'", head_subject)
 
             # Reload all YAML configuration so HA picks up the reverted files
@@ -396,6 +402,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         except Exception as err:
             self._status = STATUS_ERROR
             self._last_error = str(err)
+            self._last_activity = f"Undo failed: {err}"
             _LOGGER.error("Undo failed: %s", err)
             await self._notify_result("Undo Failed", str(err))
 

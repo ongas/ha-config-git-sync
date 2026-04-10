@@ -17,7 +17,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up sensors."""
     coordinator: GitSyncCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([GitSyncStatusSensor(coordinator, entry)])
+    async_add_entities([
+        GitSyncStatusSensor(coordinator, entry),
+        GitSyncLastActivitySensor(coordinator, entry),
+    ])
 
 
 class GitSyncStatusSensor(CoordinatorEntity, SensorEntity):
@@ -70,3 +73,33 @@ class GitSyncStatusSensor(CoordinatorEntity, SensorEntity):
             "last_check": data.get("last_check"),
             "last_error": data.get("last_error"),
         }
+
+
+class GitSyncLastActivitySensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing the last activity performed by the integration."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Last Activity"
+
+    def __init__(self, coordinator: GitSyncCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_last_activity"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "HA Config Git Sync",
+            "manufacturer": "Custom",
+            "model": "Git Sync",
+        }
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the last activity description."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("last_activity")
+        return None
+
+    @property
+    def icon(self) -> str:
+        """Return icon."""
+        return "mdi:history"

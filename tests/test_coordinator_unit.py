@@ -704,6 +704,102 @@ class TestUndoState:
         assert "is_revert_head" in data
         assert data["is_revert_head"] is False
 
+    @pytest.mark.asyncio
+    async def test_build_data_includes_last_activity(self, fake_hass, fake_entry):
+        """_build_data should expose last_activity."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        data = coord._build_data()
+        assert "last_activity" in data
+        assert data["last_activity"] is None
+
+    @pytest.mark.asyncio
+    async def test_push_sets_last_activity(self, fake_hass, fake_entry):
+        """Successful push should set _last_activity."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._changed_files = ["automations.yaml"]
+        coord._git_available = True
+
+        calls = [
+            _mock_process(returncode=0),          # git add
+            _mock_process(returncode=0),          # git commit
+            _mock_process(returncode=0, stdout=b"abc1234"),  # rev-parse
+            _mock_process(returncode=0),          # git push
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_push()
+
+        assert coord._last_activity is not None
+        assert "abc1234" in coord._last_activity
+
+    @pytest.mark.asyncio
+    async def test_push_failure_sets_last_activity(self, fake_hass, fake_entry):
+        """Failed push should set _last_activity with failure info."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._changed_files = ["test.yaml"]
+        coord._git_available = True
+
+        calls = [
+            _mock_process(returncode=1, stderr=b"add failed"),  # git add fails
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_push()
+
+        assert "Push failed" in coord._last_activity
+
+    @pytest.mark.asyncio
+    async def test_undo_sets_last_activity(self, fake_hass, fake_entry):
+        """Successful undo should set _last_activity with undo/redo label."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"UI change: automations.yaml"),
+            _mock_process(returncode=0),
+            _mock_process(returncode=0, stdout=b"abc1234"),
+            _mock_process(returncode=0),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert "Undo" in coord._last_activity
+        assert "reloaded" in coord._last_activity
+        assert "automations.yaml" in coord._last_activity
+
+    @pytest.mark.asyncio
+    async def test_redo_sets_last_activity(self, fake_hass, fake_entry):
+        """Redo (second undo press) should label activity as 'Redo'."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._is_revert_head = True  # simulate already-reverted state
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"Revert: some change"),
+            _mock_process(returncode=0),
+            _mock_process(returncode=0, stdout=b"def5678"),
+            _mock_process(returncode=0),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert "Redo" in coord._last_activity
+
+    @pytest.mark.asyncio
+    async def test_undo_failure_sets_last_activity(self, fake_hass, fake_entry):
+        """Failed undo should set _last_activity with failure info."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=1, stderr=b"bad revision"),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert "Undo failed" in coord._last_activity
+
 
 # ---------------------------------------------------------------------------
 # 9. Git operation guard (watcher + poll suppression)

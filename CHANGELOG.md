@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.0] — 2026-04-10
+
+### Added
+
+- **Last Activity sensor** — new `sensor.ha_config_git_sync_last_activity` shows a description of the last action (push, undo, redo, or failure) in the device's Activity log on the integration page.
+
 ## [1.4.0] — 2026-04-10
 
 ### Added
