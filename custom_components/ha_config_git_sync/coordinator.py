@@ -379,8 +379,17 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
             _LOGGER.info("Undo successful: reverted '%s'", head_subject)
 
+            # Reload all YAML configuration so HA picks up the reverted files
+            try:
+                await self.hass.services.async_call(
+                    "homeassistant", "reload_all", blocking=True
+                )
+                _LOGGER.info("Configuration reloaded after undo")
+            except Exception as reload_err:  # noqa: BLE001
+                _LOGGER.warning("Config reload after undo failed: %s", reload_err)
+
             await self._notify_result(
-                "Config Reverted",
+                "Config Reverted & Reloaded",
                 f"Undid: {head_subject}",
             )
 

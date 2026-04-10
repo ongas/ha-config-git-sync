@@ -536,7 +536,55 @@ class TestUndo:
         mock_notify.assert_called_once()
         title, body = mock_notify.call_args[0]
         assert "Reverted" in title
+        assert "Reloaded" in title
         assert "UI change: test.yaml" in body
+
+    @pytest.mark.asyncio
+    async def test_undo_calls_reload_all(self, fake_hass, fake_entry):
+        """Successful undo should call homeassistant.reload_all."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"UI change: test.yaml"),
+            _mock_process(returncode=0),
+            _mock_process(returncode=0, stdout=b"def5678"),
+            _mock_process(returncode=0),
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        fake_hass.services.async_call.assert_any_call(
+            "homeassistant", "reload_all", blocking=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_undo_succeeds_even_if_reload_fails(self, fake_hass, fake_entry):
+        """If reload_all fails, undo should still succeed with a warning."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        calls = [
+            _mock_process(returncode=0, stdout=b"UI change: test.yaml"),
+            _mock_process(returncode=0),
+            _mock_process(returncode=0, stdout=b"def5678"),
+            _mock_process(returncode=0),
+        ]
+
+        # Make reload_all raise, but notify should still work
+        original_async_call = fake_hass.services.async_call
+
+        async def selective_fail(*args, **kwargs):
+            if args == ("homeassistant", "reload_all"):
+                raise RuntimeError("reload unavailable")
+            return await original_async_call(*args, **kwargs)
+
+        fake_hass.services.async_call = AsyncMock(side_effect=selective_fail)
+
+        with patch("asyncio.create_subprocess_exec", side_effect=calls):
+            await coord.async_undo()
+
+        assert coord._status == STATUS_CLEAN
+        assert coord._last_error is None
 
     @pytest.mark.asyncio
     async def test_undo_sets_pushing_status_during_operation(self, fake_hass, fake_entry):
