@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.1] — 2026-04-11
+
+### Fixed
+
+- Removed `by Custom` manufacturer suffix from device display in the Home Assistant UI.
+
 ## [1.5.0] — 2026-04-10
 
 ### Added
