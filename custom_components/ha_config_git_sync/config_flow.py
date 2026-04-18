@@ -67,9 +67,6 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_REPO_PATH, default=DEFAULT_REPO_PATH): str,
                     vol.Required(CONF_BRANCH, default=DEFAULT_BRANCH): str,
                     vol.Required(CONF_REMOTE, default=DEFAULT_REMOTE): str,
-                    vol.Optional(
-                        CONF_SSH_KEY_PATH, default=DEFAULT_SSH_KEY_PATH
-                    ): str,
                 }
             ),
             errors=errors,
@@ -123,7 +120,7 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             # Check SSH key only if provided and non-empty
-            ssh_key = user_input.get(CONF_SSH_KEY_PATH) or self._repo_data.get(CONF_SSH_KEY_PATH)
+            ssh_key = user_input.get(CONF_SSH_KEY_PATH)
             if ssh_key and not os.path.isfile(ssh_key):
                 errors[CONF_SSH_KEY_PATH] = "ssh_key_not_found"
             else:
@@ -144,7 +141,7 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Optional(
-                        CONF_SSH_KEY_PATH, default=self._repo_data.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY_PATH)
+                        CONF_SSH_KEY_PATH, default=DEFAULT_SSH_KEY_PATH
                     ): str,
                     vol.Required(
                         CONF_COMMIT_AUTHOR_NAME, default=DEFAULT_COMMIT_AUTHOR_NAME
