@@ -67,7 +67,7 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_REPO_PATH, default=DEFAULT_REPO_PATH): str,
                     vol.Required(CONF_BRANCH, default=DEFAULT_BRANCH): str,
                     vol.Required(CONF_REMOTE, default=DEFAULT_REMOTE): str,
-                    vol.Required(
+                    vol.Optional(
                         CONF_SSH_KEY_PATH, default=DEFAULT_SSH_KEY_PATH
                     ): str,
                 }
@@ -268,7 +268,7 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
+                    vol.Optional(
                         CONF_SSH_KEY_PATH,
                         default=current.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY_PATH),
                     ): str,
