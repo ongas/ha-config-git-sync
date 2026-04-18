@@ -122,9 +122,10 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            ssh_key = self._repo_data[CONF_SSH_KEY_PATH]
+            # Check SSH key only if provided and non-empty
+            ssh_key = user_input.get(CONF_SSH_KEY_PATH) or self._repo_data.get(CONF_SSH_KEY_PATH)
             if ssh_key and not os.path.isfile(ssh_key):
-                errors["base"] = "ssh_key_not_found"
+                errors[CONF_SSH_KEY_PATH] = "ssh_key_not_found"
             else:
                 # Combine data from both steps
                 data = {**self._repo_data, **user_input}
@@ -142,6 +143,9 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="settings",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(
+                        CONF_SSH_KEY_PATH, default=self._repo_data.get(CONF_SSH_KEY_PATH, DEFAULT_SSH_KEY_PATH)
+                    ): str,
                     vol.Required(
                         CONF_COMMIT_AUTHOR_NAME, default=DEFAULT_COMMIT_AUTHOR_NAME
                     ): str,
