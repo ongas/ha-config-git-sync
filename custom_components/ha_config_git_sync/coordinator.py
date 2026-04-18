@@ -31,6 +31,7 @@ from .const import (
     STATUS_CLEAN,
     STATUS_ERROR,
     STATUS_PENDING,
+    STATUS_PULLING,
     STATUS_PUSHING,
 )
 
@@ -339,12 +340,12 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
     async def async_pull(self) -> None:
         """Pull latest changes from remote and reload configuration."""
-        self._status = STATUS_PUSHING
+        self._status = STATUS_PULLING
         self._git_operating = True
         self.async_set_updated_data(self._build_data())
 
         try:
-            # Fetch from remote
+            # Fetch from remote (main config)
             ssh_cmd = (
                 f"ssh -i {self._ssh_key_path} "
                 "-o StrictHostKeyChecking=no "
@@ -357,7 +358,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if rc != 0:
                 raise RuntimeError(f"git fetch failed: {stderr}")
 
-            # Reset to remote branch
+            # Reset to remote branch (main config)
             rc, _, stderr = await self._run_git(
                 "reset", "--hard", f"{self._remote}/{self._branch}"
             )
@@ -366,6 +367,28 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
             # Get new commit hash
             _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
+
+            # Also pull ha-config-git-sync custom integration if it exists
+            integration_path = "/config/custom_components/ha-config-git-sync"
+            try:
+                import os
+                if os.path.exists(integration_path):
+                    _LOGGER.info("Pulling custom integration from %s", integration_path)
+                    rc, _, stderr = await self._run_git(
+                        "-C", integration_path, "fetch", self._remote, env=fetch_env
+                    )
+                    if rc == 0:
+                        rc, _, stderr = await self._run_git(
+                            "-C", integration_path, "reset", "--hard", f"{self._remote}/{self._branch}", env=fetch_env
+                        )
+                        if rc == 0:
+                            _LOGGER.info("Custom integration pulled successfully")
+                        else:
+                            _LOGGER.warning("Custom integration reset failed: %s", stderr)
+                    else:
+                        _LOGGER.warning("Custom integration fetch failed: %s", stderr)
+            except Exception as integration_err:  # noqa: BLE001
+                _LOGGER.warning("Could not pull custom integration: %s", integration_err)
 
             self._status = STATUS_CLEAN
             self._changed_files = []
