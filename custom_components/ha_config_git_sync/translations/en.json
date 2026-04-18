@@ -4,18 +4,26 @@
     "step": {
       "user": {
         "title": "Repository Settings",
-        "description": "Configure the git repository for config synchronisation.",
+        "description": "Configure the git repository for config synchronisation.\n\nSSH key is only required if you want to PUSH changes back to the remote. You can leave it blank for read-only (pull only) access.",
         "data": {
           "repo_path": "Repository path",
           "branch": "Branch",
           "remote": "Remote name",
-          "ssh_key_path": "SSH private key path (for push)"
+          "ssh_key_path": "SSH private key path (optional, for push)"
+        }
+      },
+      "init_git": {
+        "title": "Initialize Git Repository?",
+        "description": "The directory at '{path}' is not a git repository yet. Would you like to initialize it now? This will create a .git directory and configure git with default settings. You can also skip this and set it up manually later.",
+        "data": {
+          "init_git": "✓ Initialize git repository"
         }
       },
       "settings": {
         "title": "Notification & Commit Settings",
-        "description": "Configure how changes are committed and how you are notified.",
+        "description": "Configure git operations and how you are notified.",
         "data": {
+          "ssh_key_path": "SSH private key path (optional, for push)",
           "commit_author_name": "Commit author name",
           "commit_author_email": "Commit author email",
           "notify_service": "Notify service (e.g. mobile_app)",
@@ -26,8 +34,8 @@
     },
     "error": {
       "git_not_found": "git binary not found in the HA container",
-      "not_git_repo": "The specified path is not a git repository",
-      "ssh_key_not_found": "SSH key file not found at the specified path"
+      "git_init_failed": "Failed to initialize git repository. Check that the directory is writable.",
+      "ssh_key_not_found": "SSH key file not found at the specified path. Generate one with: ssh-keygen -t ed25519 -f /config/.ssh/id_ed25519. Or leave blank for read-only (pull-only) access."
     },
     "abort": {
       "already_configured": "This repository is already configured"
