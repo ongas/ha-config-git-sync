@@ -14,9 +14,9 @@
       },
       "init_git": {
         "title": "Initialize Git Repository",
-        "description": "The directory '{path}' is not a git repository. Would you like to initialize it as a new git repository?",
+        "description": "The directory '{path}' is not a git repository yet.\n\nCheck the box below to initialize it as a new git repository (creates .git directory and configures git). Uncheck to skip - you'll need to set it up manually.",
         "data": {
-          "init_git": "Initialize git repository at this path"
+          "init_git": "Initialize git repository here"
         }
       },
       "settings": {
