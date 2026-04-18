@@ -337,6 +337,70 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._git_operating = False
             self.async_set_updated_data(self._build_data())
 
+    async def async_pull(self) -> None:
+        """Pull latest changes from remote and reload configuration."""
+        self._status = STATUS_PUSHING
+        self._git_operating = True
+        self.async_set_updated_data(self._build_data())
+
+        try:
+            # Fetch from remote
+            ssh_cmd = (
+                f"ssh -i {self._ssh_key_path} "
+                "-o StrictHostKeyChecking=no "
+                "-o UserKnownHostsFile=/dev/null"
+            )
+            fetch_env = {"GIT_SSH_COMMAND": ssh_cmd}
+            rc, _, stderr = await self._run_git(
+                "fetch", self._remote, env=fetch_env
+            )
+            if rc != 0:
+                raise RuntimeError(f"git fetch failed: {stderr}")
+
+            # Reset to remote branch
+            rc, _, stderr = await self._run_git(
+                "reset", "--hard", f"{self._remote}/{self._branch}"
+            )
+            if rc != 0:
+                raise RuntimeError(f"git reset failed: {stderr}")
+
+            # Get new commit hash
+            _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
+
+            self._status = STATUS_CLEAN
+            self._changed_files = []
+            self._last_push = dt_util.utcnow().isoformat()
+            self._last_push_commit = commit_hash
+            self._last_error = None
+
+            self._last_activity = f"Pulled {commit_hash}"
+            _LOGGER.info("Successfully pulled from %s/%s: %s", self._remote, self._branch, commit_hash)
+
+            # Reload all YAML configuration so HA picks up the pulled files
+            try:
+                await self.hass.services.async_call(
+                    "homeassistant", "reload_all", blocking=True
+                )
+                _LOGGER.info("Configuration reloaded after pull")
+            except Exception as reload_err:  # noqa: BLE001
+                _LOGGER.warning("Config reload after pull failed: %s", reload_err)
+
+            await self._notify_result(
+                "Config Pulled & Reloaded",
+                f"Pulled {commit_hash}",
+            )
+
+        except Exception as err:
+            self._status = STATUS_ERROR
+            self._last_error = str(err)
+            self._last_activity = f"Pull failed: {err}"
+            _LOGGER.error("Git pull failed: %s", err)
+            await self._notify_result("Git Pull Failed", str(err))
+
+        finally:
+            self._git_operating = False
+            self.async_set_updated_data(self._build_data())
+
     async def async_undo(self) -> None:
         """Undo/redo: revert the most recent commit with git revert HEAD.
 

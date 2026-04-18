@@ -19,6 +19,7 @@ async def async_setup_entry(
     coordinator: GitSyncCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([
         GitSyncPushButton(coordinator, entry),
+        GitSyncPullButton(coordinator, entry),
         GitSyncUndoButton(coordinator, entry),
     ])
 
@@ -44,6 +45,29 @@ class GitSyncPushButton(CoordinatorEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Handle button press — push changes to git."""
         await self.coordinator.async_push()
+
+
+class GitSyncPullButton(CoordinatorEntity, ButtonEntity):
+    """Button to manually pull latest config from git."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Pull from Git"
+    _attr_icon = "mdi:source-branch-pull"
+
+    def __init__(self, coordinator: GitSyncCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the button."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_pull"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "HA Config Git Sync",
+            "manufacturer": "Custom",
+            "model": "Git Sync",
+        }
+
+    async def async_press(self) -> None:
+        """Handle button press — pull changes from git."""
+        await self.coordinator.async_pull()
 
 
 class GitSyncUndoButton(CoordinatorEntity, ButtonEntity):
