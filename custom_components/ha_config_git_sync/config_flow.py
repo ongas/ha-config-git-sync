@@ -148,7 +148,7 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_COMMIT_AUTHOR_EMAIL, default=DEFAULT_COMMIT_AUTHOR_EMAIL
                     ): str,
-                    vol.Required(CONF_NOTIFY_SERVICE, default=""): str,
+                    vol.Optional(CONF_NOTIFY_SERVICE, default=""): str,
                     vol.Required(
                         CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
                     ): vol.All(int, vol.Range(min=1, max=60)),
@@ -284,7 +284,7 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
                             CONF_COMMIT_AUTHOR_EMAIL, DEFAULT_COMMIT_AUTHOR_EMAIL
                         ),
                     ): str,
-                    vol.Required(
+                    vol.Optional(
                         CONF_NOTIFY_SERVICE,
                         default=current.get(CONF_NOTIFY_SERVICE, ""),
                     ): str,
