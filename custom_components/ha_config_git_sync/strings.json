@@ -21,8 +21,9 @@
       },
       "settings": {
         "title": "Notification & Commit Settings",
-        "description": "Configure how changes are committed and how you are notified.",
+        "description": "Configure git operations and how you are notified.",
         "data": {
+          "ssh_key_path": "SSH private key path (optional, for push)",
           "commit_author_name": "Commit author name",
           "commit_author_email": "Commit author email",
           "notify_service": "Notify service (e.g. mobile_app)",
