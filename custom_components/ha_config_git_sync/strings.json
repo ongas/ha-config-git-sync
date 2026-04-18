@@ -12,6 +12,13 @@
           "ssh_key_path": "SSH private key path (for push)"
         }
       },
+      "init_git": {
+        "title": "Initialize Git Repository",
+        "description": "The directory '{path}' is not a git repository. Would you like to initialize it as a new git repository?",
+        "data": {
+          "init_git": "Initialize git repository at this path"
+        }
+      },
       "settings": {
         "title": "Notification & Commit Settings",
         "description": "Configure how changes are committed and how you are notified.",
@@ -26,7 +33,7 @@
     },
     "error": {
       "git_not_found": "git binary not found in the HA container",
-      "not_git_repo": "The specified path is not a git repository",
+      "git_init_failed": "Failed to initialize git repository. Check that the directory is writable.",
       "ssh_key_not_found": "SSH key file not found at the specified path"
     },
     "abort": {

@@ -13,6 +13,7 @@ CONF_COMMIT_AUTHOR_EMAIL = "commit_author_email"
 CONF_NOTIFY_SERVICE = "notify_service"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_NOTIFICATION_COOLDOWN = "notification_cooldown"
+CONF_INIT_GIT = "init_git"
 
 # Defaults
 DEFAULT_REPO_PATH = "/config"
