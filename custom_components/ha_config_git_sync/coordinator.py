@@ -251,8 +251,12 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
     async def async_push(self) -> None:
         """Commit all changes and push to remote."""
+        _LOGGER.info("Sync button pressed — checking for changes")
+        
         if not self._changed_files:
-            _LOGGER.info("No changes to push")
+            _LOGGER.info("No changes detected — repository is clean")
+            self._last_activity = "No changes to sync"
+            self.async_set_updated_data(self._build_data())
             return
 
         self._status = STATUS_PUSHING
@@ -299,6 +303,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 raise RuntimeError(f"git push failed: {stderr}")
 
             # Success
+            num_files = len(self._changed_files)
             self._status = STATUS_CLEAN
             self._changed_files = []
             self._last_push = dt_util.utcnow().isoformat()
@@ -308,7 +313,12 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._is_revert_head = False
 
             self._last_activity = f"Pushed {commit_hash}: {files_str}"
-            _LOGGER.info("Successfully pushed commit %s: %s", commit_hash, message)
+            _LOGGER.info(
+                "Successfully pushed %d file(s) in commit %s: %s",
+                num_files,
+                commit_hash,
+                message,
+            )
 
             await self._notify_result(
                 "Config Pushed to Git",
