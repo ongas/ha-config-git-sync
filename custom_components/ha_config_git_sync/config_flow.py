@@ -16,6 +16,7 @@ from .const import (
     CONF_BRANCH,
     CONF_COMMIT_AUTHOR_EMAIL,
     CONF_COMMIT_AUTHOR_NAME,
+    CONF_INIT_GIT,
     CONF_NOTIFICATION_COOLDOWN,
     CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
@@ -49,11 +50,13 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
             # Validate git is available
             if not await self._check_git_available():
                 errors["base"] = "git_not_found"
-            # Validate repo path is a git repo
+            # Check if repo path is a git repo
             elif not await self._check_is_git_repo(user_input[CONF_REPO_PATH]):
-                errors[CONF_REPO_PATH] = "not_git_repo"
+                # Not a git repo - ask if user wants to initialize it
+                self._repo_data = user_input
+                return await self.async_step_init_git()
             else:
-                # Store step 1 data and proceed to step 2
+                # Valid git repo, proceed to settings
                 self._repo_data = user_input
                 return await self.async_step_settings()
 
@@ -70,6 +73,46 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+    async def async_step_init_git(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 1b: Ask user if they want to initialize git in the directory."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            if user_input.get(CONF_INIT_GIT):
+                # User wants to initialize git
+                repo_path = self._repo_data[CONF_REPO_PATH]
+                success = await self._init_git_repo(repo_path)
+                if not success:
+                    errors["base"] = "git_init_failed"
+                    return self.async_show_form(
+                        step_id="init_git",
+                        data_schema=vol.Schema(
+                            {
+                                vol.Required(CONF_INIT_GIT, default=False): bool,
+                            }
+                        ),
+                        errors=errors,
+                        description_placeholders={
+                            "path": repo_path,
+                        },
+                    )
+            # Either initialized or user chose not to - proceed to settings
+            return await self.async_step_settings()
+
+        return self.async_show_form(
+            step_id="init_git",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_INIT_GIT, default=False): bool,
+                }
+            ),
+            description_placeholders={
+                "path": self._repo_data[CONF_REPO_PATH],
+            },
         )
 
     async def async_step_settings(
@@ -151,6 +194,52 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             await process.communicate()
             return process.returncode == 0
+        except (FileNotFoundError, OSError):
+            return False
+
+    async def _init_git_repo(self, path: str) -> bool:
+        """Initialize a new git repository at the specified path."""
+        try:
+            # Ensure directory exists
+            os.makedirs(path, exist_ok=True)
+            
+            # Initialize git repo
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "init",
+                cwd=path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                return False
+            
+            # Configure git user for this repo
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "config",
+                "user.name",
+                "HA Config Sync",
+                cwd=path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await process.communicate()
+            
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "config",
+                "user.email",
+                "ha-config-sync@local",
+                cwd=path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await process.communicate()
+            
+            return True
         except (FileNotFoundError, OSError):
             return False
 
