@@ -8,7 +8,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, STATUS_CLEAN, STATUS_ERROR, STATUS_PENDING, STATUS_PUSHING
+from .const import (
+    DOMAIN,
+    STATUS_CLEAN,
+    STATUS_ERROR,
+    STATUS_PENDING,
+    STATUS_PULLING,
+    STATUS_PUSHING,
+    STATUS_RELOADING,
+    STATUS_VALIDATING,
+)
 from .coordinator import GitSyncCoordinator
 
 
@@ -54,6 +63,9 @@ class GitSyncStatusSensor(CoordinatorEntity, SensorEntity):
             STATUS_CLEAN: "mdi:check-circle",
             STATUS_PENDING: "mdi:source-branch-sync",
             STATUS_PUSHING: "mdi:progress-upload",
+            STATUS_PULLING: "mdi:progress-download",
+            STATUS_VALIDATING: "mdi:shield-check",
+            STATUS_RELOADING: "mdi:reload",
             STATUS_ERROR: "mdi:alert-circle",
         }
         return icons.get(status, "mdi:git")

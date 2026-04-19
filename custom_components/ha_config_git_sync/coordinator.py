@@ -33,6 +33,8 @@ from .const import (
     STATUS_PENDING,
     STATUS_PULLING,
     STATUS_PUSHING,
+    STATUS_RELOADING,
+    STATUS_VALIDATING,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -207,6 +209,12 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             "last_activity": self._last_activity,
         }
 
+    def _update_progress(self, status: str, activity: str) -> None:
+        """Update status and activity, then push to entities."""
+        self._status = status
+        self._last_activity = activity
+        self.async_set_updated_data(self._build_data())
+
     async def _maybe_notify(self) -> None:
         """Send notification if cooldown allows."""
         if not self._notify_service:
@@ -262,9 +270,9 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self.async_set_updated_data(self._build_data())
             return
 
-        self._status = STATUS_PUSHING
         self._git_operating = True
-        self.async_set_updated_data(self._build_data())
+        num_files = len(self._changed_files)
+        self._update_progress(STATUS_PUSHING, f"Staging {num_files} file(s)…")
 
         try:
             # Stage all changes
@@ -279,6 +287,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             message = f"UI change: {files_str}"
 
             # Commit with configured author
+            self._update_progress(STATUS_PUSHING, f"Committing {num_files} file(s)…")
             env = {
                 "GIT_AUTHOR_NAME": self._author_name,
                 "GIT_AUTHOR_EMAIL": self._author_email,
@@ -293,6 +302,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
 
             # Push with SSH key
+            self._update_progress(STATUS_PUSHING, f"Pushing {commit_hash} to remote…")
             ssh_cmd = (
                 f"ssh -i {self._ssh_key_path} "
                 "-o StrictHostKeyChecking=no "
@@ -306,8 +316,6 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 raise RuntimeError(f"git push failed: {stderr}")
 
             # Success
-            num_files = len(self._changed_files)
-            self._status = STATUS_CLEAN
             self._changed_files = []
             self._last_push = dt_util.utcnow().isoformat()
             self._last_push_commit = commit_hash
@@ -315,7 +323,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_notification = None  # Reset cooldown
             self._is_revert_head = False
 
-            self._last_activity = f"Pushed {commit_hash}: {files_str}"
+            self._update_progress(STATUS_CLEAN, f"Pushed {commit_hash}: {files_str}")
             _LOGGER.info(
                 "Successfully pushed %d file(s) in commit %s: %s",
                 num_files,
@@ -360,9 +368,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         Backs up local state before pulling. If the new config is invalid,
         rolls back to the previous state and notifies the user.
         """
-        self._status = STATUS_PULLING
         self._git_operating = True
-        self.async_set_updated_data(self._build_data())
+        self._update_progress(STATUS_PULLING, "Backing up local state…")
 
         prev_head = None
         has_stash = False
@@ -380,6 +387,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             has_stash = rc_stash == 0
 
             # Fetch from remote (main config)
+            self._update_progress(STATUS_PULLING, "Fetching from remote…")
             ssh_cmd = (
                 f"ssh -i {self._ssh_key_path} "
                 "-o StrictHostKeyChecking=no "
@@ -401,8 +409,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
             # Get new commit hash
             _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
+            commit_hash = commit_hash.strip()
 
             # Validate configuration before reloading
+            self._update_progress(STATUS_VALIDATING, f"Validating config ({commit_hash})…")
             config_valid, config_errors = await self._check_config_valid()
             if not config_valid:
                 _LOGGER.error(
@@ -410,6 +420,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     commit_hash, config_errors,
                 )
                 # Rollback to previous state
+                self._update_progress(STATUS_PULLING, "Rolling back (invalid config)…")
                 await self._run_git("reset", "--hard", prev_head)
                 if has_stash:
                     await self._run_git("stash", "pop")
@@ -424,6 +435,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     f"Rolled back to {prev_head[:7]}.\n{config_errors}",
                 )
                 return
+
+            self._update_progress(STATUS_VALIDATING, f"Config valid ({commit_hash}) ✓")
 
             # Also pull ha-config-git-sync custom integration if it exists
             integration_path = "/config/custom_components/ha-config-git-sync"
@@ -451,16 +464,15 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 await self._run_git("stash", "drop")
                 has_stash = False
 
-            self._status = STATUS_CLEAN
             self._changed_files = []
             self._last_push = dt_util.utcnow().isoformat()
             self._last_push_commit = commit_hash
             self._last_error = None
 
-            self._last_activity = f"Pulled {commit_hash}"
             _LOGGER.info("Successfully pulled from %s/%s: %s", self._remote, self._branch, commit_hash)
 
             # Reload all YAML configuration so HA picks up the pulled files
+            self._update_progress(STATUS_RELOADING, f"Reloading config ({commit_hash})…")
             try:
                 await self.hass.services.async_call(
                     "homeassistant", "reload_all", blocking=True
@@ -468,6 +480,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("Configuration reloaded after pull")
             except Exception as reload_err:  # noqa: BLE001
                 _LOGGER.warning("Config reload after pull failed: %s", reload_err)
+
+            self._update_progress(STATUS_CLEAN, f"Pulled {commit_hash}")
 
             await self._notify_result(
                 "Config Pulled & Reloaded",
@@ -502,9 +516,9 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         Acts as a toggle — first press undoes, second press redoes, etc.
         Making a new push after an undo starts a fresh history.
         """
-        self._status = STATUS_PUSHING
         self._git_operating = True
-        self.async_set_updated_data(self._build_data())
+        action = "Redo" if self._is_revert_head else "Undo"
+        self._update_progress(STATUS_PUSHING, f"{action}: reading current commit…")
 
         try:
             # Get the current HEAD commit subject for the notification
@@ -515,6 +529,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 raise RuntimeError(f"git log failed: {stderr}")
 
             # Revert HEAD with our author info
+            self._update_progress(STATUS_PUSHING, f"{action}: reverting commit…")
             env = {
                 "GIT_AUTHOR_NAME": self._author_name,
                 "GIT_AUTHOR_EMAIL": self._author_email,
@@ -531,6 +546,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
 
             # Push
+            self._update_progress(STATUS_PUSHING, f"{action}: pushing {commit_hash} to remote…")
             ssh_cmd = (
                 f"ssh -i {self._ssh_key_path} "
                 "-o StrictHostKeyChecking=no "
@@ -543,18 +559,15 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if rc != 0:
                 raise RuntimeError(f"git push failed: {stderr}")
 
-            self._status = STATUS_CLEAN
             self._changed_files = []
             self._last_push = dt_util.utcnow().isoformat()
             self._last_push_commit = commit_hash
             self._last_error = None
 
-            action = "Redo" if self._is_revert_head else "Undo"
             self._is_revert_head = not self._is_revert_head
-            self._last_activity = f"{action} & reloaded: {head_subject}"
-            _LOGGER.info("Undo successful: reverted '%s'", head_subject)
 
             # Reload all YAML configuration so HA picks up the reverted files
+            self._update_progress(STATUS_RELOADING, f"{action}: reloading config…")
             try:
                 await self.hass.services.async_call(
                     "homeassistant", "reload_all", blocking=True
@@ -562,6 +575,9 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("Configuration reloaded after undo")
             except Exception as reload_err:  # noqa: BLE001
                 _LOGGER.warning("Config reload after undo failed: %s", reload_err)
+
+            self._update_progress(STATUS_CLEAN, f"{action} & reloaded: {head_subject}")
+            _LOGGER.info("Undo successful: reverted '%s'", head_subject)
 
             await self._notify_result(
                 "Config Reverted & Reloaded",
