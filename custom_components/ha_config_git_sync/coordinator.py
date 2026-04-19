@@ -338,13 +338,45 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._git_operating = False
             self.async_set_updated_data(self._build_data())
 
+    async def _check_config_valid(self) -> tuple[bool, str]:
+        """Check if HA configuration is valid after pulling new files."""
+        try:
+            from homeassistant.config import async_check_ha_config_file
+            errors = await async_check_ha_config_file(self.hass)
+            if errors:
+                return False, str(errors)
+            return True, ""
+        except ImportError:
+            _LOGGER.warning("Config check API not available, skipping validation")
+            return True, ""
+        except Exception as err:  # noqa: BLE001
+            return False, str(err)
+
     async def async_pull(self) -> None:
-        """Pull latest changes from remote and reload configuration."""
+        """Pull latest changes from remote, validate config, and reload.
+
+        Backs up local state before pulling. If the new config is invalid,
+        rolls back to the previous state and notifies the user.
+        """
         self._status = STATUS_PULLING
         self._git_operating = True
         self.async_set_updated_data(self._build_data())
 
+        prev_head = None
+        has_stash = False
+
         try:
+            # Save current HEAD for rollback
+            _, prev_head, _ = await self._run_git("rev-parse", "HEAD")
+            prev_head = prev_head.strip()
+
+            # Stash local changes (e.g. UI-made modifications not yet pushed)
+            rc_stash, _, _ = await self._run_git(
+                "stash", "push", "--include-untracked",
+                "-m", "git-sync-pre-pull-backup",
+            )
+            has_stash = rc_stash == 0
+
             # Fetch from remote (main config)
             ssh_cmd = (
                 f"ssh -i {self._ssh_key_path} "
@@ -368,10 +400,32 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             # Get new commit hash
             _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
 
+            # Validate configuration before reloading
+            config_valid, config_errors = await self._check_config_valid()
+            if not config_valid:
+                _LOGGER.error(
+                    "Config check failed after pull of %s: %s",
+                    commit_hash, config_errors,
+                )
+                # Rollback to previous state
+                await self._run_git("reset", "--hard", prev_head)
+                if has_stash:
+                    await self._run_git("stash", "pop")
+                    has_stash = False
+
+                self._status = STATUS_ERROR
+                self._last_error = f"Config invalid: {config_errors}"
+                self._last_activity = "Pull rejected: invalid config"
+                await self._notify_result(
+                    "Git Pull Rejected — Config Invalid",
+                    f"Commit {commit_hash} failed validation. "
+                    f"Rolled back to {prev_head[:7]}.\n{config_errors}",
+                )
+                return
+
             # Also pull ha-config-git-sync custom integration if it exists
             integration_path = "/config/custom_components/ha-config-git-sync"
             try:
-                import os
                 if os.path.exists(integration_path):
                     _LOGGER.info("Pulling custom integration from %s", integration_path)
                     rc, _, stderr = await self._run_git(
@@ -389,6 +443,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                         _LOGGER.warning("Custom integration fetch failed: %s", stderr)
             except Exception as integration_err:  # noqa: BLE001
                 _LOGGER.warning("Could not pull custom integration: %s", integration_err)
+
+            # Config is valid — drop the backup stash
+            if has_stash:
+                await self._run_git("stash", "drop")
+                has_stash = False
 
             self._status = STATUS_CLEAN
             self._changed_files = []
@@ -418,6 +477,17 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_error = str(err)
             self._last_activity = f"Pull failed: {err}"
             _LOGGER.error("Git pull failed: %s", err)
+
+            # Attempt rollback on unexpected errors
+            if prev_head:
+                try:
+                    await self._run_git("reset", "--hard", prev_head)
+                    if has_stash:
+                        await self._run_git("stash", "pop")
+                    _LOGGER.info("Rolled back to %s after pull failure", prev_head[:7])
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("Rollback after pull failure also failed")
+
             await self._notify_result("Git Pull Failed", str(err))
 
         finally:
