@@ -348,6 +348,48 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._git_operating = False
             self.async_set_updated_data(self._build_data())
 
+    # Targeted YAML reload services — avoids disrupting MQTT / other integrations
+    _YAML_RELOAD_TARGETS: list[tuple[str, str]] = [
+        ("automation", "reload"),
+        ("script", "reload"),
+        ("scene", "reload"),
+        ("group", "reload"),
+        ("input_boolean", "reload"),
+        ("input_number", "reload"),
+        ("input_select", "reload"),
+        ("input_text", "reload"),
+        ("input_datetime", "reload"),
+        ("input_button", "reload"),
+        ("timer", "reload"),
+        ("counter", "reload"),
+        ("template", "reload"),
+        ("person", "reload"),
+        ("zone", "reload"),
+        ("homeassistant", "reload_core_config"),
+        ("frontend", "reload_themes"),
+    ]
+
+    async def _reload_yaml_config(self) -> None:
+        """Reload YAML-based config without disrupting integration connections.
+
+        Calls individual reload services for each YAML domain instead of
+        homeassistant.reload_all, which can disrupt MQTT and other
+        long-lived integration connections.
+        """
+
+        async def _safe_reload(domain: str, service: str) -> None:
+            try:
+                await self.hass.services.async_call(
+                    domain, service, blocking=True
+                )
+            except Exception:  # noqa: BLE001
+                pass  # Service may not exist if domain isn't loaded
+
+        await asyncio.gather(
+            *[_safe_reload(d, s) for d, s in self._YAML_RELOAD_TARGETS]
+        )
+        _LOGGER.info("YAML configuration reloaded (targeted)")
+
     async def _check_config_valid(self) -> tuple[bool, str]:
         """Check if HA configuration is valid after pulling new files."""
         try:
@@ -471,13 +513,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
             _LOGGER.info("Successfully pulled from %s/%s: %s", self._remote, self._branch, commit_hash)
 
-            # Reload all YAML configuration so HA picks up the pulled files
+            # Reload YAML configuration so HA picks up the pulled files
             self._update_progress(STATUS_RELOADING, f"Reloading config ({commit_hash})…")
             try:
-                await self.hass.services.async_call(
-                    "homeassistant", "reload_all", blocking=True
-                )
-                _LOGGER.info("Configuration reloaded after pull")
+                await self._reload_yaml_config()
             except Exception as reload_err:  # noqa: BLE001
                 _LOGGER.warning("Config reload after pull failed: %s", reload_err)
 
@@ -566,13 +605,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
             self._is_revert_head = not self._is_revert_head
 
-            # Reload all YAML configuration so HA picks up the reverted files
+            # Reload YAML configuration so HA picks up the reverted files
             self._update_progress(STATUS_RELOADING, f"{action}: reloading config…")
             try:
-                await self.hass.services.async_call(
-                    "homeassistant", "reload_all", blocking=True
-                )
-                _LOGGER.info("Configuration reloaded after undo")
+                await self._reload_yaml_config()
             except Exception as reload_err:  # noqa: BLE001
                 _LOGGER.warning("Config reload after undo failed: %s", reload_err)
 

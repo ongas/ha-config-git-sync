@@ -540,8 +540,8 @@ class TestUndo:
         assert "UI change: test.yaml" in body
 
     @pytest.mark.asyncio
-    async def test_undo_calls_reload_all(self, fake_hass, fake_entry):
-        """Successful undo should call homeassistant.reload_all."""
+    async def test_undo_calls_yaml_reload(self, fake_hass, fake_entry):
+        """Successful undo should call targeted YAML reload services."""
         coord = _make_coordinator(fake_hass, fake_entry)
 
         calls = [
@@ -554,13 +554,15 @@ class TestUndo:
         with patch("asyncio.create_subprocess_exec", side_effect=calls):
             await coord.async_undo()
 
-        fake_hass.services.async_call.assert_any_call(
-            "homeassistant", "reload_all", blocking=True
-        )
+        # Should call targeted reloads, NOT reload_all
+        call_args = [c.args for c in fake_hass.services.async_call.call_args_list]
+        assert ("homeassistant", "reload_all") not in call_args
+        assert ("automation", "reload") in call_args
+        assert ("script", "reload") in call_args
 
     @pytest.mark.asyncio
     async def test_undo_succeeds_even_if_reload_fails(self, fake_hass, fake_entry):
-        """If reload_all fails, undo should still succeed with a warning."""
+        """If YAML reloads fail, undo should still succeed with a warning."""
         coord = _make_coordinator(fake_hass, fake_entry)
 
         calls = [
@@ -570,11 +572,15 @@ class TestUndo:
             _mock_process(returncode=0),
         ]
 
-        # Make reload_all raise, but notify should still work
+        # Make all reload services raise
         original_async_call = fake_hass.services.async_call
 
         async def selective_fail(*args, **kwargs):
-            if args == ("homeassistant", "reload_all"):
+            if len(args) >= 2 and args[1] == "reload":
+                raise RuntimeError("reload unavailable")
+            if args == ("homeassistant", "reload_core_config"):
+                raise RuntimeError("reload unavailable")
+            if args == ("frontend", "reload_themes"):
                 raise RuntimeError("reload unavailable")
             return await original_async_call(*args, **kwargs)
 
