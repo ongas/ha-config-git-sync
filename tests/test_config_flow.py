@@ -15,6 +15,7 @@ from custom_components.ha_config_git_sync.const import (
     CONF_BRANCH,
     CONF_COMMIT_AUTHOR_EMAIL,
     CONF_COMMIT_AUTHOR_NAME,
+    CONF_INIT_GIT,
     CONF_NOTIFICATION_COOLDOWN,
     CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
@@ -97,8 +98,8 @@ class TestConfigFlowStepUser:
         assert result["errors"]["base"] == "git_not_found"
 
     @pytest.mark.asyncio
-    async def test_error_not_git_repo(self):
-        """If the path is not a git repo, show 'not_git_repo' error."""
+    async def test_not_git_repo_offers_init(self):
+        """If the path is not a git repo, offer to initialise it."""
         flow = HAConfigGitSyncConfigFlow()
         git_ok = _mock_process(returncode=0, stdout=b"git version 2.40")
         not_repo = _mock_process(returncode=128, stderr=b"fatal: not a git repo")
@@ -108,7 +109,7 @@ class TestConfigFlowStepUser:
             result = await flow.async_step_user(user_input=VALID_REPO_INPUT)
 
         assert result["type"] == "form"
-        assert result["errors"][CONF_REPO_PATH] == "not_git_repo"
+        assert result["step_id"] == "init_git"
 
     @pytest.mark.asyncio
     async def test_valid_input_proceeds_to_settings(self):
@@ -150,11 +151,16 @@ class TestConfigFlowStepSettings:
         flow = HAConfigGitSyncConfigFlow()
         flow._repo_data = {**VALID_REPO_INPUT, CONF_SSH_KEY_PATH: "/nonexistent/key"}
 
+        # Settings input must include a non-empty SSH key path so the check fires
+        settings_with_key = {
+            **VALID_SETTINGS_INPUT,
+            CONF_SSH_KEY_PATH: "/nonexistent/key",
+        }
         with patch("os.path.isfile", return_value=False):
-            result = await flow.async_step_settings(user_input=VALID_SETTINGS_INPUT)
+            result = await flow.async_step_settings(user_input=settings_with_key)
 
         assert result["type"] == "form"
-        assert result["errors"]["base"] == "ssh_key_not_found"
+        assert result["errors"][CONF_SSH_KEY_PATH] == "ssh_key_not_found"
 
     @pytest.mark.asyncio
     async def test_valid_input_creates_entry(self):
