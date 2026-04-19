@@ -57,14 +57,16 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, entry) -> None:
         """Initialize the coordinator."""
-        self._repo_path: str = entry.data[CONF_REPO_PATH]
-        self._branch: str = entry.data[CONF_BRANCH]
-        self._remote: str = entry.data[CONF_REMOTE]
-        self._ssh_key_path: str = entry.data[CONF_SSH_KEY_PATH]
-        self._author_name: str = entry.data[CONF_COMMIT_AUTHOR_NAME]
-        self._author_email: str = entry.data[CONF_COMMIT_AUTHOR_EMAIL]
-        self._notify_service: str = entry.data[CONF_NOTIFY_SERVICE]
-        self._cooldown_minutes: int = entry.data[CONF_NOTIFICATION_COOLDOWN]
+        # Options flow saves to entry.options; merge over entry.data
+        cfg = {**entry.data, **entry.options}
+        self._repo_path: str = cfg[CONF_REPO_PATH]
+        self._branch: str = cfg[CONF_BRANCH]
+        self._remote: str = cfg[CONF_REMOTE]
+        self._ssh_key_path: str = cfg[CONF_SSH_KEY_PATH]
+        self._author_name: str = cfg[CONF_COMMIT_AUTHOR_NAME]
+        self._author_email: str = cfg[CONF_COMMIT_AUTHOR_EMAIL]
+        self._notify_service: str = cfg[CONF_NOTIFY_SERVICE]
+        self._cooldown_minutes: int = cfg[CONF_NOTIFICATION_COOLDOWN]
 
         self._last_notification: float | None = None
         self._status: str = STATUS_CLEAN
