@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     STATUS_CLEAN,
     STATUS_ERROR,
+    STATUS_MERGE_CONFLICT,
     STATUS_PENDING,
     STATUS_PULLING,
     STATUS_PUSHING,
@@ -83,6 +84,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._is_revert_head: bool = False
         self._git_operating: bool = False
         self._last_activity: str | None = None
+        self._merge_conflict_files: list[str] = []
+        self._has_merge_conflict: bool = False
 
         scan_interval = entry.data[CONF_SCAN_INTERVAL]
 
@@ -207,6 +210,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             "last_check": dt_util.utcnow().isoformat(),
             "is_revert_head": self._is_revert_head,
             "last_activity": self._last_activity,
+            "has_merge_conflict": self._has_merge_conflict,
+            "merge_conflict_files": self._merge_conflict_files,
         }
 
     def _update_progress(self, status: str, activity: str) -> None:
@@ -404,6 +409,13 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         except Exception as err:  # noqa: BLE001
             return False, str(err)
 
+    async def _get_merge_conflict_files(self) -> list[str]:
+        """Get list of files with merge conflicts."""
+        rc, stdout, _ = await self._run_git("diff", "--name-only", "--diff-filter=U")
+        if rc != 0:
+            return []
+        return [f for f in stdout.split("\n") if f.strip()]
+
     async def async_pull(self) -> None:
         """Pull latest changes from remote, validate config, and reload.
 
@@ -442,16 +454,42 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if rc != 0:
                 raise RuntimeError(f"git fetch failed: {stderr}")
 
-            # Reset to remote branch (main config)
+            # Attempt merge with remote branch to detect conflicts
+            self._update_progress(STATUS_PULLING, "Merging remote changes…")
             rc, _, stderr = await self._run_git(
-                "reset", "--hard", f"{self._remote}/{self._branch}"
+                "merge", f"{self._remote}/{self._branch}", "-m", "git-sync-pull-merge"
             )
+            
+            # Check for merge conflicts
+            conflict_files = await self._get_merge_conflict_files()
+            if conflict_files:
+                self._status = STATUS_MERGE_CONFLICT
+                self._merge_conflict_files = conflict_files
+                self._has_merge_conflict = True
+                self._last_error = f"Merge conflict in files: {', '.join(conflict_files)}"
+                self._last_activity = f"Merge conflict detected in {len(conflict_files)} file(s)"
+                self.async_set_updated_data(self._build_data())
+                
+                # Abort the merge to maintain a clean state
+                await self._run_git("merge", "--abort")
+                
+                await self._notify_result(
+                    "Merge Conflict Detected",
+                    f"Pull failed due to merge conflicts in:\n" + "\n".join(conflict_files)
+                    + "\n\nPlease resolve conflicts manually or reset to remote.",
+                )
+                return
+            
             if rc != 0:
-                raise RuntimeError(f"git reset failed: {stderr}")
+                raise RuntimeError(f"git merge failed: {stderr}")
 
             # Get new commit hash
             _, commit_hash, _ = await self._run_git("rev-parse", "--short", "HEAD")
             commit_hash = commit_hash.strip()
+            
+            # Clear any previous merge conflict state
+            self._has_merge_conflict = False
+            self._merge_conflict_files = []
 
             # Validate configuration before reloading
             self._update_progress(STATUS_VALIDATING, f"Validating config ({commit_hash})…")

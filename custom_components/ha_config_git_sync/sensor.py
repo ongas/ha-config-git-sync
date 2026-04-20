@@ -12,6 +12,7 @@ from .const import (
     DOMAIN,
     STATUS_CLEAN,
     STATUS_ERROR,
+    STATUS_MERGE_CONFLICT,
     STATUS_PENDING,
     STATUS_PULLING,
     STATUS_PUSHING,
@@ -67,6 +68,7 @@ class GitSyncStatusSensor(CoordinatorEntity, SensorEntity):
             STATUS_VALIDATING: "mdi:shield-check",
             STATUS_RELOADING: "mdi:reload",
             STATUS_ERROR: "mdi:alert-circle",
+            STATUS_MERGE_CONFLICT: "mdi:source-branch-remove",
         }
         return icons.get(status, "mdi:git")
 
@@ -83,6 +85,8 @@ class GitSyncStatusSensor(CoordinatorEntity, SensorEntity):
             "last_push_commit": data.get("last_push_commit"),
             "last_check": data.get("last_check"),
             "last_error": data.get("last_error"),
+            "has_merge_conflict": data.get("has_merge_conflict", False),
+            "merge_conflict_files": data.get("merge_conflict_files", []),
         }
 
 

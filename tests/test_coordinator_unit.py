@@ -13,6 +13,7 @@ from custom_components.ha_config_git_sync.const import (
     ACTION_PUSH,
     STATUS_CLEAN,
     STATUS_ERROR,
+    STATUS_MERGE_CONFLICT,
     STATUS_PENDING,
     STATUS_PUSHING,
 )
@@ -864,5 +865,117 @@ class TestGitOperationGuard:
 
         with patch("asyncio.create_subprocess_exec", side_effect=calls):
             await coord.async_undo()
+
+        assert coord._git_operating is False
+
+# ---------------------------------------------------------------------------
+# Test Merge Conflict Detection in Pull Operations
+# ---------------------------------------------------------------------------
+
+class TestMergeConflictDetection:
+    """Tests for merge conflict detection during pull operations."""
+
+    @pytest.mark.asyncio
+    async def test_merge_conflict_detected_during_pull(self, fake_hass, fake_entry):
+        """async_pull should detect merge conflicts and set appropriate status."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        # Mock processes for: fetch, merge (with conflict), diff, merge --abort
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge (fails)
+            _mock_process(returncode=0, stdout=b"config.yaml\nautomation.yaml"),  # diff --name-only
+            _mock_process(returncode=0, stdout=b""),  # merge --abort
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            await coord.async_pull()
+
+        assert coord._status == "merge_conflict"
+        assert coord._has_merge_conflict is True
+        assert set(coord._merge_conflict_files) == {"config.yaml", "automation.yaml"}
+        assert "Merge conflict" in coord._last_activity
+
+    @pytest.mark.asyncio
+    async def test_merge_conflict_files_in_data(self, fake_hass, fake_entry):
+        """Merge conflict files should be included in coordinator data."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._status = "merge_conflict"
+        coord._has_merge_conflict = True
+        coord._merge_conflict_files = ["file1.yaml", "file2.yaml"]
+
+        data = coord._build_data()
+
+        assert data["has_merge_conflict"] is True
+        assert data["merge_conflict_files"] == ["file1.yaml", "file2.yaml"]
+
+    @pytest.mark.asyncio
+    async def test_no_merge_conflict_clears_conflict_state(self, fake_hass, fake_entry):
+        """Successful merge should clear previous conflict state."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        # Set initial conflict state
+        coord._has_merge_conflict = True
+        coord._merge_conflict_files = ["old_file.yaml"]
+
+        # Mock processes for: fetch, merge (succeeds), etc.
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b""),  # merge (succeeds)
+            _mock_process(returncode=1, stdout=b""),  # diff --name-only (no conflicts)
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse HEAD
+            _mock_process(returncode=0),  # check_config_valid mocked separately
+        ]
+
+        # Mock the config validation to return valid
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            with patch.object(coord, "_check_config_valid", return_value=(True, "")):
+                with patch.object(coord, "_reload_yaml_config"):
+                    await coord.async_pull()
+
+        assert coord._has_merge_conflict is False
+        assert coord._merge_conflict_files == []
+
+    @pytest.mark.asyncio
+    async def test_merge_conflict_notification_sent(self, fake_hass, fake_entry):
+        """Merge conflict should trigger a notification."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge
+            _mock_process(returncode=0, stdout=b"conflict_file.yaml"),  # diff
+            _mock_process(returncode=0, stdout=b""),  # merge --abort
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            with patch.object(coord, "_notify_result") as mock_notify:
+                await coord.async_pull()
+
+        mock_notify.assert_called_once()
+        args, _ = mock_notify.call_args
+        assert "Merge Conflict" in args[0]
+
+    @pytest.mark.asyncio
+    async def test_git_operating_cleared_after_pull_conflict(self, fake_hass, fake_entry):
+        """_git_operating should be False after pull with conflict."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge
+            _mock_process(returncode=0, stdout=b"file.yaml"),  # diff
+            _mock_process(returncode=0, stdout=b""),  # merge --abort
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            await coord.async_pull()
 
         assert coord._git_operating is False
