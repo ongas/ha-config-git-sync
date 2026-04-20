@@ -420,8 +420,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         
         try:
             # Get list of all git-tracked files
-            result = await self._run_git("ls-files")
-            tracked_files = result.strip().split('\n') if result.strip() else []
+            rc, stdout, _ = await self._run_git("ls-files")
+            if rc != 0:
+                _LOGGER.error("git ls-files failed with return code %d", rc)
+                return backup
+            tracked_files = stdout.strip().split('\n') if stdout.strip() else []
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Failed to list git-tracked files for backup: %s", err)
             return backup  # Return empty dict, don't fail the pull
