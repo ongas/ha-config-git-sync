@@ -410,42 +410,38 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         except Exception as err:  # noqa: BLE001
             return False, str(err)
 
-    async def _create_config_backup(self) -> dict[str, str] | None:
+    async def _create_config_backup(self) -> dict[str, str]:
         """Create an in-memory backup of git-tracked files only.
         
         Backs up only the files that git is managing, not the entire config directory.
-        Returns a dict mapping file paths to their contents, or None if backup failed.
+        Returns a dict mapping file paths to their contents (empty dict if backup failed).
         """
+        backup = {}
+        
         try:
-            backup = {}
-            
-            try:
-                # Get list of all git-tracked files
-                result = await self._run_git("ls-files")
-                tracked_files = result.strip().split('\n') if result.strip() else []
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.error("Failed to list git-tracked files: %s", err)
-                return None
-            
-            # Read content of each tracked file
-            repo_path = Path(self._repo_path)
-            for file_path in tracked_files:
-                if not file_path:
-                    continue
-                
-                full_path = repo_path / file_path
-                try:
-                    if full_path.exists() and full_path.is_file():
-                        with open(full_path, 'r', encoding='utf-8') as f:
-                            backup[file_path] = f.read()
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("Failed to backup file %s: %s", file_path, err)
-            
-            _LOGGER.info("Created backup of %d git-tracked files", len(backup))
-            return backup
+            # Get list of all git-tracked files
+            result = await self._run_git("ls-files")
+            tracked_files = result.strip().split('\n') if result.strip() else []
         except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Failed to create config backup: %s", err)
-            return None
+            _LOGGER.error("Failed to list git-tracked files for backup: %s", err)
+            return backup  # Return empty dict, don't fail the pull
+        
+        # Read content of each tracked file
+        repo_path = Path(self._repo_path)
+        for file_path in tracked_files:
+            if not file_path:
+                continue
+            
+            full_path = repo_path / file_path
+            try:
+                if full_path.exists() and full_path.is_file():
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        backup[file_path] = f.read()
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Failed to backup file %s: %s", file_path, err)
+        
+        _LOGGER.info("Created backup of %d git-tracked files", len(backup))
+        return backup
 
     async def _restore_config_backup(self, backup: dict[str, str] | None) -> bool:
         """Restore git-tracked files from an in-memory backup.
@@ -511,8 +507,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         try:
             # Create file backup first - this is our safety net if everything fails
             backup = await self._create_config_backup()
-            if backup is None:
-                raise RuntimeError("Failed to create config backup before pull")
+            # Backup is always created (returns empty dict if failed)
+            # No need to fail the pull, we can still proceed with recovery
             
             # Save current HEAD for rollback
             _, prev_head, _ = await self._run_git("rev-parse", "HEAD")
