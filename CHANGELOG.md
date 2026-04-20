@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.3] — 2026-04-21
+
+### Fixed
+
+- **CRITICAL: Fix Home Assistant event loop blocking** — The backup system was using synchronous blocking I/O (tarfile, shutil) in async methods, freezing the event loop and causing HA to crash on "Pull from Git". Completely rewrote backup system to use in-memory dictionary with zero blocking operations.
+- **Backup captures ONLY git-tracked files** — Previous implementation was backing up the entire `/config` directory (multi-gigabyte tar.gz). Now captures only files managed by git, making backups lightweight and fast.
+- **Added multi-layered recovery** — Backup now restored as fallback for merge conflicts, config validation failures, and config reload failures. If new config fails to reload, system automatically restores and retries with old config.
+
 ## [1.5.2] — 2026-04-18
 
 ### Added
