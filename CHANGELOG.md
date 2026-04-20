@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.5] — 2026-04-21
+
+### Fixed
+
+- **Fix backup creation crash: `_run_git` tuple not unpacked** — `_run_git()` returns `(returncode, stdout, stderr)` but the backup code assigned the whole tuple to a single variable, then called `.strip()` on it, causing an `AttributeError`. This was the root cause of "Pull failed: Failed to create config backup before pull". Now properly unpacks the tuple and checks the return code.
+
 ## [1.9.4] — 2026-04-21
 
 ### Fixed
