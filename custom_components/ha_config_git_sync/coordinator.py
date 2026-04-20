@@ -565,7 +565,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     rc_pop, _, stderr_pop = await self._run_git("stash", "pop")
                     if rc_pop != 0:
                         _LOGGER.error("Failed to restore stashed changes: %s", stderr_pop)
-                        self._last_error = f"Merge conflict + stash restore failed: {stderr_pop}"
+                        # If stash restore fails, use backup as last resort
+                        if backup and await self._restore_config_backup(backup):
+                            _LOGGER.warning("Recovered from backup after merge conflict + stash pop failure")
+                        else:
+                            self._last_error = f"Merge conflict + stash restore failed: {stderr_pop}"
                     has_stash = False
                 
                 await self._notify_result(
@@ -597,10 +601,23 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 )
                 # Rollback to previous state
                 self._update_progress(STATUS_PULLING, "Rolling back (invalid config)…")
-                await self._run_git("reset", "--hard", prev_head)
-                if has_stash:
-                    await self._run_git("stash", "pop")
-                    has_stash = False
+                rc_reset, _, stderr_reset = await self._run_git("reset", "--hard", prev_head)
+                if rc_reset != 0:
+                    _LOGGER.error("Failed to rollback after config validation failure: %s", stderr_reset)
+                    # If git reset fails, use backup as last resort
+                    if backup and await self._restore_config_backup(backup):
+                        _LOGGER.warning("Recovered from backup after config validation + reset failure")
+                    else:
+                        self._last_error = f"Config invalid + reset failed: {stderr_reset}"
+                else:
+                    if has_stash:
+                        rc_pop, _, stderr_pop = await self._run_git("stash", "pop")
+                        if rc_pop != 0:
+                            _LOGGER.error("Failed to restore stashed changes after rollback: %s", stderr_pop)
+                            # If stash pop fails, use backup as last resort
+                            if backup and await self._restore_config_backup(backup):
+                                _LOGGER.warning("Recovered from backup after config validation + stash pop failure")
+                        has_stash = False
 
                 self._status = STATUS_ERROR
                 self._last_error = f"Config invalid: {config_errors}"
