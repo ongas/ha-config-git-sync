@@ -411,10 +411,19 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
     async def _get_merge_conflict_files(self) -> list[str]:
         """Get list of files with merge conflicts."""
-        rc, stdout, _ = await self._run_git("diff", "--name-only", "--diff-filter=U")
+        rc, stdout, _ = await self._run_git("ls-files", "--unmerged")
         if rc != 0:
             return []
-        return [f for f in stdout.split("\n") if f.strip()]
+        # Parse output: each unmerged file appears once per stage (1, 2, 3)
+        # Get unique file names
+        files = set()
+        for line in stdout.split("\n"):
+            if line.strip():
+                # Format: [mode] [object] [stage] [file]
+                parts = line.split("\t", 1)
+                if len(parts) == 2:
+                    files.add(parts[1])
+        return sorted(list(files))
 
     async def async_pull(self) -> None:
         """Pull latest changes from remote, validate config, and reload.
@@ -480,6 +489,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 )
                 return
             
+            # If merge failed but no conflicts found, it's a different error
             if rc != 0:
                 raise RuntimeError(f"git merge failed: {stderr}")
 
