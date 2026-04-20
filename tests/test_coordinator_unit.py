@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -892,7 +893,9 @@ class TestMergeConflictDetection:
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
-            await coord.async_pull()
+            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+                with patch.object(coord, "_cleanup_old_backups"):
+                    await coord.async_pull()
 
         assert coord._status == "merge_conflict"
         assert coord._has_merge_conflict is True
@@ -935,7 +938,9 @@ class TestMergeConflictDetection:
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
             with patch.object(coord, "_check_config_valid", return_value=(True, "")):
                 with patch.object(coord, "_reload_yaml_config"):
-                    await coord.async_pull()
+                    with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+                        with patch.object(coord, "_cleanup_old_backups"):
+                            await coord.async_pull()
 
         assert coord._has_merge_conflict is False
         assert coord._merge_conflict_files == []
@@ -957,7 +962,9 @@ class TestMergeConflictDetection:
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
             with patch.object(coord, "_notify_result") as mock_notify:
-                await coord.async_pull()
+                with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+                    with patch.object(coord, "_cleanup_old_backups"):
+                        await coord.async_pull()
 
         mock_notify.assert_called_once()
         args, _ = mock_notify.call_args
@@ -978,7 +985,9 @@ class TestMergeConflictDetection:
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
-            await coord.async_pull()
+            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+                with patch.object(coord, "_cleanup_old_backups"):
+                    await coord.async_pull()
 
         assert coord._git_operating is False
 
@@ -998,8 +1007,91 @@ class TestMergeConflictDetection:
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
-            await coord.async_pull()
+            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+                with patch.object(coord, "_cleanup_old_backups"):
+                    await coord.async_pull()
 
         # Verify status is conflict and stash was restored
         assert coord._status == "merge_conflict"
         assert coord._has_merge_conflict is True
+
+    @pytest.mark.asyncio
+    async def test_backup_cleanup_on_successful_pull(self, fake_hass, fake_entry, tmp_path):
+        """Old backups should be cleaned up after successful pull and reload."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        
+        # Create backup directory with old backups
+        backup_dir = Path(coord._repo_path).parent / ".ha-config-git-sync-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create some old backup files
+        old_backup1 = backup_dir / "config_backup_20250101_100000.tar.gz"
+        old_backup2 = backup_dir / "config_backup_20250101_110000.tar.gz"
+        old_backup1.touch()
+        old_backup2.touch()
+        
+        # Mock processes for successful pull
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b""),  # merge (succeeds)
+            _mock_process(returncode=0, stdout=b""),  # ls-files --unmerged (no conflicts)
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash drop
+        ]
+        
+        new_backup = str(backup_dir / "config_backup_20250101_120000.tar.gz")
+        
+        # Create the new backup file so it exists
+        Path(new_backup).touch()
+        
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            with patch.object(coord, "_create_config_backup", return_value=new_backup):
+                with patch.object(coord, "_check_config_valid", return_value=(True, "")):
+                    with patch.object(coord, "_reload_yaml_config"):
+                        await coord.async_pull()
+        
+        # Old backups should be deleted
+        assert not old_backup1.exists(), "Old backup 1 should be deleted"
+        assert not old_backup2.exists(), "Old backup 2 should be deleted"
+        # New backup should be kept
+        assert Path(new_backup).exists(), "New backup should be kept"
+
+    @pytest.mark.asyncio
+    async def test_backups_kept_on_pull_failure(self, fake_hass, fake_entry, tmp_path):
+        """All backups should be kept if pull fails - needed for recovery."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        
+        # Create backup directory with backups
+        backup_dir = Path(coord._repo_path).parent / ".ha-config-git-sync-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        old_backup = backup_dir / "config_backup_20250101_100000.tar.gz"
+        old_backup.touch()
+        
+        # Mock processes - merge fails (conflict)
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge fails
+            _mock_process(returncode=0, stdout=b"100644 abc123 1\tfile.yaml\n100644 def456 2\tfile.yaml\n100644 ghi789 3\tfile.yaml"),  # ls-files --unmerged
+            _mock_process(returncode=0, stdout=b""),  # merge --abort
+            _mock_process(returncode=0, stdout=b""),  # stash pop
+        ]
+        
+        new_backup = str(backup_dir / "config_backup_20250101_110000.tar.gz")
+        
+        # Create the new backup file so it exists
+        Path(new_backup).touch()
+        
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            with patch.object(coord, "_create_config_backup", return_value=new_backup):
+                await coord.async_pull()
+        
+        # Both old and new backups should exist (no cleanup on failure)
+        assert old_backup.exists(), "Old backup should be kept on pull failure"
+        assert Path(new_backup).exists(), "New backup should be kept on pull failure"
+
+

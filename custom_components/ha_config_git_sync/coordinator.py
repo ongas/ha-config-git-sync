@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
+import tarfile
 from datetime import timedelta
+from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -409,6 +412,95 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         except Exception as err:  # noqa: BLE001
             return False, str(err)
 
+    def _create_config_backup(self) -> str | None:
+        """Create a tar backup of the entire config directory.
+        
+        Returns the path to the backup file, or None if backup failed.
+        """
+        try:
+            backup_dir = Path(self._repo_path).parent / ".ha-config-git-sync-backups"
+            backup_dir.mkdir(exist_ok=True)
+            
+            timestamp = dt_util.utcnow().strftime("%Y%m%d_%H%M%S")
+            backup_path = backup_dir / f"config_backup_{timestamp}.tar.gz"
+            
+            _LOGGER.info("Creating config backup at %s", backup_path)
+            with tarfile.open(backup_path, "w:gz") as tar:
+                # Archive the entire config directory
+                tar.add(self._repo_path, arcname="config", recursive=True)
+            
+            _LOGGER.info("Config backup created successfully: %s", backup_path)
+            return str(backup_path)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to create config backup: %s", err)
+            return None
+
+    def _restore_config_backup(self, backup_path: str) -> bool:
+        """Restore config directory from a backup file.
+        
+        Returns True if restoration succeeded, False otherwise.
+        """
+        try:
+            if not os.path.exists(backup_path):
+                _LOGGER.error("Backup file not found: %s", backup_path)
+                return False
+            
+            _LOGGER.warning("Restoring config from backup: %s", backup_path)
+            
+            # Remove current config directory
+            if os.path.exists(self._repo_path):
+                shutil.rmtree(self._repo_path)
+            
+            # Extract backup
+            with tarfile.open(backup_path, "r:gz") as tar:
+                tar.extractall(path=Path(self._repo_path).parent)
+            
+            _LOGGER.warning("Config restored successfully from backup")
+            return True
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to restore config from backup: %s", err)
+            return False
+
+    def _cleanup_old_backups(self, keep_backup_path: str | None = None) -> None:
+        """Delete old backup files, keeping only the most recent one.
+        
+        Args:
+            keep_backup_path: Path to the backup file to keep (typically the current one).
+                             If provided, all other backups will be deleted.
+                             If None, deletes all backups except the most recent by timestamp.
+        """
+        try:
+            backup_dir = Path(self._repo_path).parent / ".ha-config-git-sync-backups"
+            if not backup_dir.exists():
+                return
+            
+            # Find all config backup files
+            backup_files = sorted(backup_dir.glob("config_backup_*.tar.gz"))
+            if not backup_files:
+                return
+            
+            if keep_backup_path:
+                # Delete all backups except the specified one
+                keep_path = Path(keep_backup_path)
+                for backup_file in backup_files:
+                    if backup_file != keep_path:
+                        try:
+                            backup_file.unlink()
+                            _LOGGER.debug("Deleted old backup: %s", backup_file)
+                        except Exception as err:  # noqa: BLE001
+                            _LOGGER.warning("Failed to delete old backup %s: %s", backup_file, err)
+            else:
+                # Keep only the most recent, delete all others
+                most_recent = backup_files[-1]  # Last in sorted list
+                for backup_file in backup_files[:-1]:
+                    try:
+                        backup_file.unlink()
+                        _LOGGER.debug("Deleted old backup: %s", backup_file)
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.warning("Failed to delete old backup %s: %s", backup_file, err)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Error during backup cleanup: %s", err)
+
     async def _get_merge_conflict_files(self) -> list[str]:
         """Get list of files with merge conflicts."""
         rc, stdout, _ = await self._run_git("ls-files", "--unmerged")
@@ -428,16 +520,22 @@ class GitSyncCoordinator(DataUpdateCoordinator):
     async def async_pull(self) -> None:
         """Pull latest changes from remote, validate config, and reload.
 
-        Backs up local state before pulling. If the new config is invalid,
-        rolls back to the previous state and notifies the user.
+        Backs up local state and creates a file backup before pulling.
+        If the new config is invalid or pull fails, rolls back to the previous state.
         """
         self._git_operating = True
         self._update_progress(STATUS_PULLING, "Backing up local state…")
 
         prev_head = None
         has_stash = False
+        backup_path: str | None = None
 
         try:
+            # Create file backup first - this is our safety net if everything fails
+            backup_path = self._create_config_backup()
+            if not backup_path:
+                raise RuntimeError("Failed to create config backup before pull")
+            
             # Save current HEAD for rollback
             _, prev_head, _ = await self._run_git("rev-parse", "HEAD")
             prev_head = prev_head.strip()
@@ -578,6 +676,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             except Exception as reload_err:  # noqa: BLE001
                 _LOGGER.warning("Config reload after pull failed: %s", reload_err)
 
+            # ONLY cleanup old backups after successful reload
+            # If reload failed, keep all backups for potential recovery
+            self._cleanup_old_backups(keep_backup_path=backup_path)
+
             self._update_progress(STATUS_CLEAN, f"Pulled {commit_hash}")
 
             await self._notify_result(
@@ -585,13 +687,14 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 f"Pulled {commit_hash}",
             )
 
+
         except Exception as err:
             self._status = STATUS_ERROR
             self._last_error = str(err)
             self._last_activity = f"Pull failed: {err}"
             _LOGGER.error("Git pull failed: %s", err)
 
-            # Attempt rollback on unexpected errors
+            # Attempt git rollback first
             if prev_head:
                 try:
                     await self._run_git("reset", "--hard", prev_head)
@@ -600,6 +703,14 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     _LOGGER.info("Rolled back to %s after pull failure", prev_head[:7])
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Rollback after pull failure also failed")
+                    # If git rollback fails, use file backup as last resort
+                    if backup_path and self._restore_config_backup(backup_path):
+                        _LOGGER.warning("Recovered from file backup after git rollback failure")
+            else:
+                # No git rollback possible, try file backup
+                if backup_path and self._restore_config_backup(backup_path):
+                    _LOGGER.warning("Recovered from file backup after pull failure")
+            
 
             await self._notify_result("Git Pull Failed", str(err))
 
