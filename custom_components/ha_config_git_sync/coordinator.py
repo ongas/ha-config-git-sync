@@ -480,7 +480,17 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 self.async_set_updated_data(self._build_data())
                 
                 # Abort the merge to maintain a clean state
-                await self._run_git("merge", "--abort")
+                rc_abort, _, stderr_abort = await self._run_git("merge", "--abort")
+                if rc_abort != 0:
+                    _LOGGER.error("Failed to abort merge: %s", stderr_abort)
+                
+                # Restore stashed changes before returning
+                if has_stash:
+                    rc_pop, _, stderr_pop = await self._run_git("stash", "pop")
+                    if rc_pop != 0:
+                        _LOGGER.error("Failed to restore stashed changes: %s", stderr_pop)
+                        self._last_error = f"Merge conflict + stash restore failed: {stderr_pop}"
+                    has_stash = False
                 
                 await self._notify_result(
                     "Merge Conflict Detected",

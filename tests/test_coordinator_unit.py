@@ -880,14 +880,15 @@ class TestMergeConflictDetection:
         """async_pull should detect merge conflicts and set appropriate status."""
         coord = _make_coordinator(fake_hass, fake_entry)
 
-        # Mock processes for: rev-parse, stash, fetch, merge (with conflict), ls-files --unmerged, merge --abort
+        # Mock processes for: rev-parse, stash, fetch, merge (with conflict), ls-files --unmerged, merge --abort, stash pop
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b"Saved working directory"),  # stash push (successful, has_stash=True)
             _mock_process(returncode=0, stdout=b""),  # fetch
             _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge (fails)
             _mock_process(returncode=0, stdout=b"100644 abc123 1\tconfig.yaml\n100644 def456 2\tconfig.yaml\n100644 ghi789 3\tconfig.yaml\n100644 abc123 1\tautomation.yaml\n100644 def456 2\tautomation.yaml\n100644 ghi789 3\tautomation.yaml"),  # ls-files --unmerged
             _mock_process(returncode=0, stdout=b""),  # merge --abort
+            _mock_process(returncode=0, stdout=b"Restored"),  # stash pop
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
@@ -946,11 +947,12 @@ class TestMergeConflictDetection:
 
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b"Saved working directory"),  # stash push (successful)
             _mock_process(returncode=0, stdout=b""),  # fetch
             _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge
             _mock_process(returncode=0, stdout=b"100644 abc123 1\tconflict_file.yaml\n100644 def456 2\tconflict_file.yaml\n100644 ghi789 3\tconflict_file.yaml"),  # ls-files --unmerged
             _mock_process(returncode=0, stdout=b""),  # merge --abort
+            _mock_process(returncode=0, stdout=b"Restored"),  # stash pop
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
@@ -979,3 +981,25 @@ class TestMergeConflictDetection:
             await coord.async_pull()
 
         assert coord._git_operating is False
+
+    @pytest.mark.asyncio
+    async def test_merge_conflict_restores_stashed_changes(self, fake_hass, fake_entry):
+        """Stashed changes should be restored when merge conflict is detected."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash push (has_stash=True)
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge
+            _mock_process(returncode=0, stdout=b"100644 abc123 1\tfile.yaml\n100644 def456 2\tfile.yaml\n100644 ghi789 3\tfile.yaml"),  # ls-files --unmerged
+            _mock_process(returncode=0, stdout=b""),  # merge --abort
+            _mock_process(returncode=0, stdout=b""),  # stash pop (restore changes)
+        ]
+
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            await coord.async_pull()
+
+        # Verify status is conflict and stash was restored
+        assert coord._status == "merge_conflict"
+        assert coord._has_merge_conflict is True
