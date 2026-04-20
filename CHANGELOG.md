@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.4] — 2026-04-21
+
+### Fixed
+
+- **Fix backup creation failure blocking pull operations** — The backup creation was failing if any exception occurred during `git ls-files`, which blocked the entire pull operation. Now backup creation gracefully handles failures and returns an empty dict, allowing the pull to proceed. This fixes the error "Pull failed: Failed to create config backup before pull".
+
 ## [1.9.3] — 2026-04-21
 
 ### Fixed
