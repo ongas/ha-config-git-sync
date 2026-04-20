@@ -669,7 +669,20 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             try:
                 await self._reload_yaml_config()
             except Exception as reload_err:  # noqa: BLE001
-                _LOGGER.warning("Config reload after pull failed: %s", reload_err)
+                _LOGGER.error("Config reload after pull failed: %s", reload_err)
+                # If reload fails, restore the backup as we can't safely use the new config
+                if backup and await self._restore_config_backup(backup):
+                    _LOGGER.warning("Restored backup after config reload failure - HA may need restart to fully recover")
+                    self._last_error = f"Config reload failed, restored backup: {reload_err}"
+                else:
+                    self._last_error = f"Config reload failed and backup restore failed: {reload_err}"
+                
+                await self._notify_result(
+                    "Config Reload Failed",
+                    f"Pulled {commit_hash} but config reload failed. "
+                    f"Backup has been restored. You may need to restart Home Assistant.",
+                )
+                return
 
             self._update_progress(STATUS_CLEAN, f"Pulled {commit_hash}")
 
