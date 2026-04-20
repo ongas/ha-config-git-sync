@@ -672,8 +672,22 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Config reload after pull failed: %s", reload_err)
                 # If reload fails, restore the backup as we can't safely use the new config
                 if backup and await self._restore_config_backup(backup):
-                    _LOGGER.warning("Restored backup after config reload failure - HA may need restart to fully recover")
-                    self._last_error = f"Config reload failed, restored backup: {reload_err}"
+                    _LOGGER.warning("Restored backup after config reload failure, attempting reload with old config…")
+                    # Try to reload again with the restored (old) config
+                    try:
+                        await self._reload_yaml_config()
+                        _LOGGER.info("Successfully reloaded restored backup config")
+                        self._last_error = None
+                        await self._notify_result(
+                            "Config Reload Failed → Recovered",
+                            f"Pulled {commit_hash} but config reload failed. "
+                            f"Backup has been restored and reloaded. "
+                            f"Please pull again once you've fixed the config.",
+                        )
+                        return
+                    except Exception as retry_err:  # noqa: BLE001
+                        _LOGGER.error("Failed to reload restored backup config: %s", retry_err)
+                        self._last_error = f"Config reload failed, backup restored but reload of restored config also failed: {retry_err}"
                 else:
                     self._last_error = f"Config reload failed and backup restore failed: {reload_err}"
                 
