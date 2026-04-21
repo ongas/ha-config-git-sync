@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.8] — 2026-04-21
+
+### Fixed
+
+- **Push race condition** — "Push to git" now runs a fresh `git status` check before deciding there are no changes. Previously, pressing push immediately after a file change could show "No changes to sync" because the poll cycle hadn't updated yet.
+
 ## [1.9.7] — 2026-04-21
 
 ### Fixed

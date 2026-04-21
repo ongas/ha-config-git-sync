@@ -271,7 +271,18 @@ class GitSyncCoordinator(DataUpdateCoordinator):
     async def async_push(self) -> None:
         """Commit all changes and push to remote."""
         _LOGGER.info("Sync button pressed — checking for changes")
-        
+
+        # Fresh git status check to avoid race with poll cycle
+        rc, stdout, _ = await self._run_git("status", "--porcelain")
+        if rc == 0 and stdout:
+            files = []
+            for line in stdout.split("\n"):
+                if not line or len(line) < 4:
+                    continue
+                files.append(line[3:])
+            if files:
+                self._changed_files = files
+
         if not self._changed_files:
             _LOGGER.info("No changes detected — repository is clean")
             self._last_activity = "No changes to sync"

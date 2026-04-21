@@ -174,11 +174,13 @@ class TestPush:
         coord = _make_coordinator(fake_hass, fake_entry)
         coord._changed_files = []
 
-        # Should return early without calling git
-        with patch("asyncio.create_subprocess_exec") as mock_exec:
+        # git status --porcelain returns empty (no changes)
+        status_proc = _mock_process(returncode=0, stdout=b"")
+
+        with patch("asyncio.create_subprocess_exec", return_value=status_proc):
             await coord.async_push()
 
-        mock_exec.assert_not_called()
+        assert coord._last_activity == "No changes to sync"
 
     @pytest.mark.asyncio
     async def test_push_success(self, fake_hass, fake_entry):
@@ -187,13 +189,14 @@ class TestPush:
         coord._changed_files = ["configuration.yaml"]
         coord._status = STATUS_PENDING
 
+        status_proc = _mock_process(returncode=0, stdout=b" M configuration.yaml\n")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=0)
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_CLEAN
@@ -207,9 +210,11 @@ class TestPush:
         coord = _make_coordinator(fake_hass, fake_entry)
         coord._changed_files = ["file.yaml"]
 
+        status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
         add_proc = _mock_process(returncode=1, stderr=b"git add failed")
 
-        with patch("asyncio.create_subprocess_exec", return_value=add_proc):
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, add_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_ERROR
@@ -220,11 +225,12 @@ class TestPush:
         coord = _make_coordinator(fake_hass, fake_entry)
         coord._changed_files = ["file.yaml"]
 
+        status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=1, stderr=b"nothing to commit")
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[add_proc, commit_proc]):
+                    side_effect=[status_proc, add_proc, commit_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_ERROR
@@ -234,13 +240,14 @@ class TestPush:
         coord = _make_coordinator(fake_hass, fake_entry)
         coord._changed_files = ["file.yaml"]
 
+        status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=1, stderr=b"permission denied")
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_ERROR
@@ -253,16 +260,21 @@ class TestPush:
         coord._changed_files = ["file1.yaml", "file2.yaml"]
 
         captured_args = []
+        call_count = [0]
 
         async def capture_exec(*args, **kwargs):
             captured_args.append(args)
+            call_count[0] += 1
+            # First call is git status — return empty so _changed_files stays as-is
+            if call_count[0] == 1:
+                return _mock_process(returncode=0, stdout=b"")
             return _mock_process(returncode=0, stdout=b"abc1234")
 
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
             await coord.async_push()
 
-        # Second call is commit — args: "git", "commit", "-m", <message>
-        commit_call = captured_args[1]
+        # Third call is commit (after status + add) — args: "git", "commit", "-m", <message>
+        commit_call = captured_args[2]
         message = commit_call[3]  # "-m" argument value
         assert "file1.yaml" in message
         assert "file2.yaml" in message
@@ -273,20 +285,21 @@ class TestPush:
         coord._changed_files = [f"file{i}.yaml" for i in range(10)]
 
         captured_args = []
+        call_count = [0]
 
         async def capture_exec(*args, **kwargs):
             captured_args.append(args)
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _mock_process(returncode=0, stdout=b"")
             return _mock_process(returncode=0, stdout=b"abc1234")
 
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
             await coord.async_push()
 
-        commit_call = captured_args[1]
+        commit_call = captured_args[2]
         message = commit_call[3]
         assert "(+5 more)" in message
-
-
-# ---------------------------------------------------------------------------
 # 4. Notification logic
 # ---------------------------------------------------------------------------
 
@@ -346,13 +359,14 @@ class TestNotifications:
                                    {"notify_service": "notify.test"})
         coord._changed_files = ["file.yaml"]
 
+        status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=0)
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_push()
 
         # At least one call should be the success notification
@@ -365,9 +379,11 @@ class TestNotifications:
                                    {"notify_service": "notify.test"})
         coord._changed_files = ["file.yaml"]
 
+        status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
         add_proc = _mock_process(returncode=1, stderr=b"add failed")
 
-        with patch("asyncio.create_subprocess_exec", return_value=add_proc):
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, add_proc]):
             await coord.async_push()
 
         calls = fake_hass.services.async_call.call_args_list
@@ -385,13 +401,14 @@ class TestActionHandling:
         coord = _make_coordinator(fake_hass, fake_entry)
         coord._changed_files = ["file.yaml"]
 
+        status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=0)
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_handle_action(ACTION_PUSH)
 
         assert coord._status == STATUS_CLEAN
@@ -675,6 +692,7 @@ class TestUndoState:
         coord._changed_files = ["file.yaml"]
 
         calls = [
+            _mock_process(returncode=0, stdout=b" M file.yaml\n"),  # git status
             _mock_process(returncode=0),          # git add
             _mock_process(returncode=0),          # git commit
             _mock_process(returncode=0, stdout=b"abc1234"),  # rev-parse
@@ -729,6 +747,7 @@ class TestUndoState:
         coord._git_available = True
 
         calls = [
+            _mock_process(returncode=0, stdout=b" M automations.yaml\n"),  # git status
             _mock_process(returncode=0),          # git add
             _mock_process(returncode=0),          # git commit
             _mock_process(returncode=0, stdout=b"abc1234"),  # rev-parse
@@ -749,6 +768,7 @@ class TestUndoState:
         coord._git_available = True
 
         calls = [
+            _mock_process(returncode=0, stdout=b" M test.yaml\n"),  # git status
             _mock_process(returncode=1, stderr=b"add failed"),  # git add fails
         ]
 
@@ -847,9 +867,11 @@ class TestGitOperationGuard:
         coord = _make_coordinator(fake_hass, fake_entry)
         coord._changed_files = ["file.yaml"]
 
+        status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
         add_proc = _mock_process(returncode=1, stderr=b"git add failed")
 
-        with patch("asyncio.create_subprocess_exec", return_value=add_proc):
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, add_proc]):
             await coord.async_push()
 
         assert coord._git_operating is False
