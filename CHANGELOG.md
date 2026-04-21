@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.7] — 2026-04-21
+
+### Fixed
+
+- Show "Config reloaded" confirmation in sensor activity after successful pull — previously only showed "Pulled {hash}" with no indication that reload succeeded.
+
 ## [1.9.6] — 2026-04-21
 
 ### Added

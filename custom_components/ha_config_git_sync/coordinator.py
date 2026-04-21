@@ -775,7 +775,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 )
                 return
 
-            self._update_progress(STATUS_CLEAN, f"Pulled {commit_hash}")
+            self._update_progress(STATUS_CLEAN, f"Pulled {commit_hash} ✓ Config reloaded")
 
             # Successful reload — clean up old backups, keep only the latest
             await self._cleanup_old_backups(keep_path=backup_path)
