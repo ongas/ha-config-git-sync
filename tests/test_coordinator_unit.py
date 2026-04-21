@@ -881,11 +881,13 @@ class TestMergeConflictDetection:
         """async_pull should detect merge conflicts and set appropriate status."""
         coord = _make_coordinator(fake_hass, fake_entry)
 
-        # Mock processes for: rev-parse, stash, fetch, merge (with conflict), ls-files --unmerged, merge --abort, stash pop
+        # New flow: rev-parse HEAD, fetch, rev-parse remote, merge-base, stash, merge, ls-files --unmerged, merge --abort, stash pop
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b"Saved working directory"),  # stash push (successful, has_stash=True)
             _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different = remote has changes)
+            _mock_process(returncode=0, stdout=b"Saved working directory"),  # stash push
             _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge (fails)
             _mock_process(returncode=0, stdout=b"100644 abc123 1\tconfig.yaml\n100644 def456 2\tconfig.yaml\n100644 ghi789 3\tconfig.yaml\n100644 abc123 1\tautomation.yaml\n100644 def456 2\tautomation.yaml\n100644 ghi789 3\tautomation.yaml"),  # ls-files --unmerged
             _mock_process(returncode=0, stdout=b""),  # merge --abort
@@ -893,7 +895,7 @@ class TestMergeConflictDetection:
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
-            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.json"):
                     await coord.async_pull()
 
         assert coord._status == "merge_conflict"
@@ -922,22 +924,24 @@ class TestMergeConflictDetection:
         coord._has_merge_conflict = True
         coord._merge_conflict_files = ["old_file.yaml"]
 
-        # Mock processes for: rev-parse, stash, fetch, merge (succeeds), ls-files --unmerged, rev-parse HEAD, check_config
+        # New flow: rev-parse HEAD, fetch, rev-parse remote, merge-base, stash, merge, ls-files --unmerged, rev-parse HEAD, stash drop
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different)
+            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=0, stdout=b""),  # merge (succeeds)
             _mock_process(returncode=0, stdout=b""),  # ls-files --unmerged (no conflicts)
-            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse HEAD
-            _mock_process(returncode=0),  # check_config_valid mocked separately
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse --short HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash drop
         ]
 
-        # Mock the config validation to return valid
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
             with patch.object(coord, "_check_config_valid", return_value=(True, "")):
                 with patch.object(coord, "_reload_yaml_config"):
-                    with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+                    with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.json"):
+                        with patch.object(coord, "_cleanup_old_backups"):
                             await coord.async_pull()
 
         assert coord._has_merge_conflict is False
@@ -950,8 +954,10 @@ class TestMergeConflictDetection:
 
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b"Saved working directory"),  # stash push (successful)
             _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different)
+            _mock_process(returncode=0, stdout=b"Saved working directory"),  # stash push
             _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge
             _mock_process(returncode=0, stdout=b"100644 abc123 1\tconflict_file.yaml\n100644 def456 2\tconflict_file.yaml\n100644 ghi789 3\tconflict_file.yaml"),  # ls-files --unmerged
             _mock_process(returncode=0, stdout=b""),  # merge --abort
@@ -960,7 +966,7 @@ class TestMergeConflictDetection:
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
             with patch.object(coord, "_notify_result") as mock_notify:
-                with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+                with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.json"):
                         await coord.async_pull()
 
         mock_notify.assert_called_once()
@@ -974,15 +980,17 @@ class TestMergeConflictDetection:
 
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different)
+            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge
             _mock_process(returncode=0, stdout=b"100644 abc123 1\tfile.yaml\n100644 def456 2\tfile.yaml\n100644 ghi789 3\tfile.yaml"),  # ls-files --unmerged
             _mock_process(returncode=0, stdout=b""),  # merge --abort
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
-            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.json"):
                     await coord.async_pull()
 
         assert coord._git_operating is False
@@ -994,8 +1002,10 @@ class TestMergeConflictDetection:
 
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b""),  # stash push (has_stash=True)
             _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different)
+            _mock_process(returncode=0, stdout=b""),  # stash push (has_stash=True)
             _mock_process(returncode=1, stderr=b"CONFLICT"),  # merge
             _mock_process(returncode=0, stdout=b"100644 abc123 1\tfile.yaml\n100644 def456 2\tfile.yaml\n100644 ghi789 3\tfile.yaml"),  # ls-files --unmerged
             _mock_process(returncode=0, stdout=b""),  # merge --abort
@@ -1003,7 +1013,7 @@ class TestMergeConflictDetection:
         ]
 
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
-            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.tar.gz"):
+            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.json"):
                     await coord.async_pull()
 
         # Verify status is conflict and stash was restored
@@ -1011,28 +1021,27 @@ class TestMergeConflictDetection:
         assert coord._has_merge_conflict is True
 
     @pytest.mark.asyncio
-    @pytest.mark.asyncio
     async def test_backup_created_before_pull(self, fake_hass, fake_entry):
-        """Backup of git-tracked files should be created before pull."""
+        """Backup of git-tracked files should be created before merge when remote has changes."""
         coord = _make_coordinator(fake_hass, fake_entry)
         
-        # Track if backup was called
         backup_called = False
-        original_backup = coord._create_config_backup
         
         async def mock_backup():
             nonlocal backup_called
             backup_called = True
-            return {"automations.yaml": "test: content"}
+            return "/tmp/backup.json"
         
-        # Mock processes for successful pull
+        # New flow: rev-parse HEAD, fetch, rev-parse remote, merge-base, stash, merge, ls-files, rev-parse HEAD, stash drop
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different)
+            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=0, stdout=b""),  # merge (succeeds)
             _mock_process(returncode=0, stdout=b""),  # ls-files --unmerged (no conflicts)
-            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse --short HEAD
             _mock_process(returncode=0, stdout=b""),  # stash drop
         ]
         
@@ -1040,49 +1049,97 @@ class TestMergeConflictDetection:
             with patch.object(coord, "_create_config_backup", side_effect=mock_backup):
                 with patch.object(coord, "_check_config_valid", return_value=(True, "")):
                     with patch.object(coord, "_reload_yaml_config"):
-                        await coord.async_pull()
+                        with patch.object(coord, "_cleanup_old_backups"):
+                            await coord.async_pull()
         
-        # Verify backup was called
-        assert backup_called, "Backup should be created before pull"
+        assert backup_called, "Backup should be created before merge"
 
     @pytest.mark.asyncio
-    async def test_backup_created_as_dict_of_tracked_files(self, fake_hass, fake_entry):
-        """Backup should be a dict of git-tracked files, not a tar file."""
+    async def test_backup_stored_on_disk(self, fake_hass, fake_entry):
+        """Backup should be stored as a JSON file on disk, not in memory."""
         coord = _make_coordinator(fake_hass, fake_entry)
         
-        # Capture the backup that was created
-        captured_backup = None
-        original_create = coord._create_config_backup
+        captured_path = None
         
-        async def mock_create():
-            # Create a simple backup dict
-            nonlocal captured_backup
-            captured_backup = {"automations.yaml": "test: content", "configuration.yaml": "homeassistant:"}
-            return captured_backup
+        async def mock_backup():
+            nonlocal captured_path
+            captured_path = "/tmp/ha-backup/backup_12345.json"
+            return captured_path
         
-        # Mock processes for successful pull
         procs = [
             _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
-            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different)
+            _mock_process(returncode=0, stdout=b""),  # stash push
             _mock_process(returncode=0, stdout=b""),  # merge (succeeds)
-            _mock_process(returncode=0, stdout=b""),  # ls-files --unmerged (no conflicts)
-            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # ls-files --unmerged
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse --short HEAD
             _mock_process(returncode=0, stdout=b""),  # stash drop
         ]
         
         with patch("asyncio.create_subprocess_exec", side_effect=procs):
-            with patch.object(coord, "_create_config_backup", side_effect=mock_create):
+            with patch.object(coord, "_create_config_backup", side_effect=mock_backup):
                 with patch.object(coord, "_check_config_valid", return_value=(True, "")):
                     with patch.object(coord, "_reload_yaml_config"):
-                        await coord.async_pull()
+                        with patch.object(coord, "_cleanup_old_backups"):
+                            await coord.async_pull()
         
-        # Verify backup was created as dict, not tar file
-        assert captured_backup is not None
-        assert isinstance(captured_backup, dict), "Backup should be a dictionary"
-        assert "automations.yaml" in captured_backup
-        assert "configuration.yaml" in captured_backup
-        assert isinstance(captured_backup["automations.yaml"], str)
+        assert captured_path is not None
+        assert captured_path.endswith(".json"), "Backup should be a JSON file"
+
+    @pytest.mark.asyncio
+    async def test_pull_skips_when_no_remote_changes(self, fake_hass, fake_entry):
+        """Pull should return early when remote has no new commits."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        
+        # merge-base returns remote_head itself, meaning remote is ancestor of HEAD
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse origin/main (same as HEAD)
+            _mock_process(returncode=0, stdout=b"abc123"),  # merge-base (== remote_head)
+        ]
+        
+        backup_called = False
+        async def mock_backup():
+            nonlocal backup_called
+            backup_called = True
+            return "/tmp/backup.json"
+        
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            with patch.object(coord, "_create_config_backup", side_effect=mock_backup):
+                await coord.async_pull()
+        
+        assert coord._status == "clean"
+        assert "up to date" in coord._last_activity.lower()
+        assert not backup_called, "Backup should NOT be created when no remote changes"
+
+    @pytest.mark.asyncio
+    async def test_old_backups_cleaned_after_successful_reload(self, fake_hass, fake_entry):
+        """Old backups should be cleaned up after a successful pull + reload."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        
+        procs = [
+            _mock_process(returncode=0, stdout=b"abc123"),  # rev-parse HEAD
+            _mock_process(returncode=0, stdout=b""),  # fetch
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse origin/main
+            _mock_process(returncode=0, stdout=b"abc000"),  # merge-base (different)
+            _mock_process(returncode=0, stdout=b""),  # stash push
+            _mock_process(returncode=0, stdout=b""),  # merge
+            _mock_process(returncode=0, stdout=b""),  # ls-files --unmerged
+            _mock_process(returncode=0, stdout=b"def456"),  # rev-parse --short HEAD
+            _mock_process(returncode=0, stdout=b""),  # stash drop
+        ]
+        
+        with patch("asyncio.create_subprocess_exec", side_effect=procs):
+            with patch.object(coord, "_create_config_backup", return_value="/tmp/backup.json"):
+                with patch.object(coord, "_check_config_valid", return_value=(True, "")):
+                    with patch.object(coord, "_reload_yaml_config"):
+                        with patch.object(coord, "_cleanup_old_backups") as mock_cleanup:
+                            await coord.async_pull()
+        
+        mock_cleanup.assert_called_once_with(keep_path="/tmp/backup.json")
 
 
 

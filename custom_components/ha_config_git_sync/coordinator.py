@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -410,73 +412,133 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         except Exception as err:  # noqa: BLE001
             return False, str(err)
 
-    async def _create_config_backup(self) -> dict[str, str]:
-        """Create an in-memory backup of git-tracked files only.
+    async def _create_config_backup(self) -> str | None:
+        """Create a disk-based backup of git-tracked files.
         
-        Backs up only the files that git is managing, not the entire config directory.
-        Returns a dict mapping file paths to their contents (empty dict if backup failed).
+        Backs up only the files that git is managing as a JSON file
+        in .git/ha-config-git-sync-backup/.
+        Returns the backup file path, or None if backup failed.
         """
-        backup = {}
+        backup_dir = Path(self._repo_path) / ".git" / "ha-config-git-sync-backup"
         
         try:
-            # Get list of all git-tracked files
+            backup_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            _LOGGER.error("Failed to create backup directory: %s", err)
+            return None
+        
+        backup_data: dict[str, str] = {}
+        
+        try:
             rc, stdout, _ = await self._run_git("ls-files")
             if rc != 0:
                 _LOGGER.error("git ls-files failed with return code %d", rc)
-                return backup
+                return None
             tracked_files = stdout.strip().split('\n') if stdout.strip() else []
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Failed to list git-tracked files for backup: %s", err)
-            return backup  # Return empty dict, don't fail the pull
+            return None
         
-        # Read content of each tracked file
         repo_path = Path(self._repo_path)
         for file_path in tracked_files:
             if not file_path:
                 continue
-            
             full_path = repo_path / file_path
             try:
                 if full_path.exists() and full_path.is_file():
-                    with open(full_path, 'r', encoding='utf-8') as f:
-                        backup[file_path] = f.read()
+                    content = await self.hass.async_add_executor_job(
+                        full_path.read_text, "utf-8"
+                    )
+                    backup_data[file_path] = content
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Failed to backup file %s: %s", file_path, err)
         
-        _LOGGER.info("Created backup of %d git-tracked files", len(backup))
-        return backup
-
-    async def _restore_config_backup(self, backup: dict[str, str] | None) -> bool:
-        """Restore git-tracked files from an in-memory backup.
+        if not backup_data:
+            _LOGGER.warning("No files backed up — backup is empty")
+            return None
         
-        Only restores the files that git manages, not the entire config directory.
+        backup_path = backup_dir / f"backup_{int(time.time())}.json"
+        try:
+            await self.hass.async_add_executor_job(
+                backup_path.write_text,
+                json.dumps(backup_data, ensure_ascii=False),
+                "utf-8",
+            )
+        except OSError as err:
+            _LOGGER.error("Failed to write backup file: %s", err)
+            return None
+        
+        _LOGGER.info("Created backup of %d files at %s", len(backup_data), backup_path.name)
+        return str(backup_path)
+
+    async def _restore_config_backup(self, backup_path: str | None) -> bool:
+        """Restore git-tracked files from a disk-based backup.
+        
         Returns True if restoration succeeded, False otherwise.
         """
-        if not backup:
-            _LOGGER.warning("No backup provided for restoration")
+        if not backup_path:
+            _LOGGER.warning("No backup path provided for restoration")
+            return False
+        
+        path = Path(backup_path)
+        if not path.exists():
+            _LOGGER.error("Backup file not found: %s", backup_path)
             return False
         
         try:
-            _LOGGER.warning("Restoring %d git-tracked files from backup", len(backup))
-            
-            repo_path = Path(self._repo_path)
-            restored_count = 0
-            
-            for file_path, content in backup.items():
-                full_path = repo_path / file_path
-                try:
-                    full_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(full_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    restored_count += 1
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("Failed to restore file %s: %s", file_path, err)
-            
-            _LOGGER.warning("Restored %d files from backup", restored_count)
-            return restored_count > 0
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Failed to restore config from backup: %s", err)
+            raw = await self.hass.async_add_executor_job(path.read_text, "utf-8")
+            backup_data: dict[str, str] = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as err:
+            _LOGGER.error("Failed to read backup file: %s", err)
             return False
+        
+        if not backup_data:
+            _LOGGER.warning("Backup file is empty")
+            return False
+        
+        _LOGGER.warning("Restoring %d files from backup %s", len(backup_data), path.name)
+        
+        repo_path = Path(self._repo_path)
+        restored_count = 0
+        
+        for file_path, content in backup_data.items():
+            full_path = repo_path / file_path
+            try:
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                await self.hass.async_add_executor_job(
+                    full_path.write_text, content, "utf-8"
+                )
+                restored_count += 1
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Failed to restore file %s: %s", file_path, err)
+        
+        _LOGGER.warning("Restored %d files from backup", restored_count)
+        return restored_count > 0
+
+    async def _cleanup_old_backups(self, keep_path: str | None = None) -> None:
+        """Delete old backup files, keeping only the specified one.
+        
+        Called after a successful reload to clean up previous backups.
+        """
+        backup_dir = Path(self._repo_path) / ".git" / "ha-config-git-sync-backup"
+        if not backup_dir.exists():
+            return
+        
+        keep_name = Path(keep_path).name if keep_path else None
+        
+        try:
+            for f in await self.hass.async_add_executor_job(
+                lambda: list(backup_dir.glob("backup_*.json"))
+            ):
+                if keep_name and f.name == keep_name:
+                    continue
+                try:
+                    await self.hass.async_add_executor_job(f.unlink)
+                    _LOGGER.debug("Deleted old backup: %s", f.name)
+                except OSError as err:
+                    _LOGGER.warning("Failed to delete old backup %s: %s", f.name, err)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Failed to clean up old backups: %s", err)
 
     async def _get_merge_conflict_files(self) -> list[str]:
         """Get list of files with merge conflicts."""
@@ -497,35 +559,23 @@ class GitSyncCoordinator(DataUpdateCoordinator):
     async def async_pull(self) -> None:
         """Pull latest changes from remote, validate config, and reload.
 
-        Backs up git-tracked files before pulling.
-        If the new config is invalid or pull fails, rolls back to the previous state.
+        Fetches first to check for remote changes. If no new commits exist,
+        returns early. Otherwise backs up git-tracked files to disk before
+        merging. If the new config is invalid or reload fails, rolls back.
         """
         self._git_operating = True
-        self._update_progress(STATUS_PULLING, "Backing up local state…")
+        self._update_progress(STATUS_PULLING, "Fetching from remote…")
 
         prev_head = None
         has_stash = False
-        backup: dict[str, str] | None = None
+        backup_path: str | None = None
 
         try:
-            # Create file backup first - this is our safety net if everything fails
-            backup = await self._create_config_backup()
-            # Backup is always created (returns empty dict if failed)
-            # No need to fail the pull, we can still proceed with recovery
-            
             # Save current HEAD for rollback
             _, prev_head, _ = await self._run_git("rev-parse", "HEAD")
             prev_head = prev_head.strip()
 
-            # Stash local changes (e.g. UI-made modifications not yet pushed)
-            rc_stash, _, _ = await self._run_git(
-                "stash", "push", "--include-untracked",
-                "-m", "git-sync-pre-pull-backup",
-            )
-            has_stash = rc_stash == 0
-
-            # Fetch from remote (main config)
-            self._update_progress(STATUS_PULLING, "Fetching from remote…")
+            # Fetch from remote first to check for changes
             ssh_cmd = (
                 f"ssh -i {self._ssh_key_path} "
                 "-o StrictHostKeyChecking=no "
@@ -537,6 +587,34 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             )
             if rc != 0:
                 raise RuntimeError(f"git fetch failed: {stderr}")
+
+            # Check if remote has new commits
+            _, remote_head, _ = await self._run_git(
+                "rev-parse", f"{self._remote}/{self._branch}"
+            )
+            remote_head = remote_head.strip()
+
+            # Use merge-base to check if remote is already an ancestor of HEAD
+            rc_mb, merge_base, _ = await self._run_git(
+                "merge-base", remote_head, prev_head
+            )
+            if rc_mb == 0 and merge_base.strip() == remote_head:
+                # Remote HEAD is an ancestor of local HEAD — nothing new
+                self._update_progress(STATUS_CLEAN, "Already up to date")
+                self._last_error = None
+                _LOGGER.info("No remote changes to pull — already up to date")
+                return
+
+            # Remote has new commits — create disk backup before merging
+            self._update_progress(STATUS_PULLING, "Backing up local state…")
+            backup_path = await self._create_config_backup()
+
+            # Stash local changes (e.g. UI-made modifications not yet pushed)
+            rc_stash, _, _ = await self._run_git(
+                "stash", "push", "--include-untracked",
+                "-m", "git-sync-pre-pull-backup",
+            )
+            has_stash = rc_stash == 0
 
             # Attempt merge with remote branch to detect conflicts
             self._update_progress(STATUS_PULLING, "Merging remote changes…")
@@ -565,7 +643,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     if rc_pop != 0:
                         _LOGGER.error("Failed to restore stashed changes: %s", stderr_pop)
                         # If stash restore fails, use backup as last resort
-                        if backup and await self._restore_config_backup(backup):
+                        if backup_path and await self._restore_config_backup(backup_path):
                             _LOGGER.warning("Recovered from backup after merge conflict + stash pop failure")
                         else:
                             self._last_error = f"Merge conflict + stash restore failed: {stderr_pop}"
@@ -604,7 +682,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 if rc_reset != 0:
                     _LOGGER.error("Failed to rollback after config validation failure: %s", stderr_reset)
                     # If git reset fails, use backup as last resort
-                    if backup and await self._restore_config_backup(backup):
+                    if backup_path and await self._restore_config_backup(backup_path):
                         _LOGGER.warning("Recovered from backup after config validation + reset failure")
                     else:
                         self._last_error = f"Config invalid + reset failed: {stderr_reset}"
@@ -614,7 +692,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                         if rc_pop != 0:
                             _LOGGER.error("Failed to restore stashed changes after rollback: %s", stderr_pop)
                             # If stash pop fails, use backup as last resort
-                            if backup and await self._restore_config_backup(backup):
+                            if backup_path and await self._restore_config_backup(backup_path):
                                 _LOGGER.warning("Recovered from backup after config validation + stash pop failure")
                         has_stash = False
 
@@ -670,7 +748,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             except Exception as reload_err:  # noqa: BLE001
                 _LOGGER.error("Config reload after pull failed: %s", reload_err)
                 # If reload fails, restore the backup as we can't safely use the new config
-                if backup and await self._restore_config_backup(backup):
+                if backup_path and await self._restore_config_backup(backup_path):
                     _LOGGER.warning("Restored backup after config reload failure, attempting reload with old config…")
                     # Try to reload again with the restored (old) config
                     try:
@@ -699,6 +777,9 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
             self._update_progress(STATUS_CLEAN, f"Pulled {commit_hash}")
 
+            # Successful reload — clean up old backups, keep only the latest
+            await self._cleanup_old_backups(keep_path=backup_path)
+
             await self._notify_result(
                 "Config Pulled & Reloaded",
                 f"Pulled {commit_hash}",
@@ -721,11 +802,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Rollback after pull failure also failed")
                     # If git rollback fails, use file backup as last resort
-                    if backup and await self._restore_config_backup(backup):
+                    if backup_path and await self._restore_config_backup(backup_path):
                         _LOGGER.warning("Recovered from file backup after git rollback failure")
             else:
                 # No git rollback possible, try file backup
-                if backup and await self._restore_config_backup(backup):
+                if backup_path and await self._restore_config_backup(backup_path):
                     _LOGGER.warning("Recovered from file backup after pull failure")
             
 

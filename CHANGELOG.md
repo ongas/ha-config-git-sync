@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.9.6] — 2026-04-21
+
+### Added
+
+- **Skip pull when no remote changes** — After fetching, compares local HEAD with remote using `merge-base`. If remote has no new commits, returns "Already up to date" without stashing, merging, validating, or reloading. Reduces unnecessary operations and avoids disrupting HA.
+- **Disk-based backup persistence** — Backups are now stored as JSON files in `.git/ha-config-git-sync-backup/` instead of in-memory dicts. Backups survive the pull operation lifecycle and persist on disk.
+- **Backup cleanup after successful reload** — Old backup files are only deleted after a confirmed successful config reload. The latest backup always remains on disk as a safety net.
+- **Non-blocking file I/O in backups** — Backup creation and restoration now use `async_add_executor_job` to avoid blocking the HA event loop during file reads/writes.
+
+### Changed
+
+- Pull flow reordered: fetch → compare → [backup → stash → merge] for efficiency. Backup only created when remote actually has new commits.
+
 ## [1.9.5] — 2026-04-21
 
 ### Fixed
