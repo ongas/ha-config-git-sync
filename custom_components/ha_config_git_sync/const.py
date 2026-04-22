@@ -26,9 +26,18 @@ DEFAULT_SCAN_INTERVAL = 5  # minutes (fallback poll; primary is inotify)
 DEFAULT_NOTIFICATION_COOLDOWN = 30  # minutes
 DEFAULT_DEBOUNCE_SECONDS = 5  # debounce rapid filesystem events
 
+# Config keys — remote check
+CONF_REMOTE_CHECK_ENABLED = "remote_check_enabled"
+
+# Defaults — remote check
+DEFAULT_REMOTE_CHECK_ENABLED = True
+REMOTE_FETCH_TIMEOUT = 30  # seconds — abort fetch if it takes longer
+
 # Notification actions
 ACTION_PUSH = "HA_GIT_SYNC_PUSH"
 ACTION_DISMISS = "HA_GIT_SYNC_DISMISS"
+ACTION_PULL = "HA_GIT_SYNC_PULL"
+ACTION_PULL_DISMISS = "HA_GIT_SYNC_PULL_DISMISS"
 
 # Statuses
 STATUS_CLEAN = "clean"

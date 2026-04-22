@@ -20,6 +20,7 @@ from .const import (
     CONF_NOTIFICATION_COOLDOWN,
     CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
+    CONF_REMOTE_CHECK_ENABLED,
     CONF_REPO_PATH,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
@@ -28,6 +29,7 @@ from .const import (
     DEFAULT_COMMIT_AUTHOR_NAME,
     DEFAULT_NOTIFICATION_COOLDOWN,
     DEFAULT_REMOTE,
+    DEFAULT_REMOTE_CHECK_ENABLED,
     DEFAULT_REPO_PATH,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SSH_KEY_PATH,
@@ -157,6 +159,10 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_NOTIFICATION_COOLDOWN,
                         default=DEFAULT_NOTIFICATION_COOLDOWN,
                     ): vol.All(int, vol.Range(min=5, max=1440)),
+                    vol.Required(
+                        CONF_REMOTE_CHECK_ENABLED,
+                        default=DEFAULT_REMOTE_CHECK_ENABLED,
+                    ): bool,
                 }
             ),
             errors=errors,
@@ -299,6 +305,12 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
                             CONF_NOTIFICATION_COOLDOWN, DEFAULT_NOTIFICATION_COOLDOWN
                         ),
                     ): vol.All(int, vol.Range(min=5, max=1440)),
+                    vol.Required(
+                        CONF_REMOTE_CHECK_ENABLED,
+                        default=current.get(
+                            CONF_REMOTE_CHECK_ENABLED, DEFAULT_REMOTE_CHECK_ENABLED
+                        ),
+                    ): bool,
                 }
             ),
             errors=errors,

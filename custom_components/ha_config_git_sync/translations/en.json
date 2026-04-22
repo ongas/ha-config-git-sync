@@ -28,7 +28,8 @@
           "commit_author_email": "Commit author email",
           "notify_service": "Notify service (e.g. mobile_app)",
           "scan_interval": "Scan interval (minutes)",
-          "notification_cooldown": "Notification cooldown (minutes)"
+          "notification_cooldown": "Notification cooldown (minutes)",
+          "remote_check_enabled": "Check for remote updates"
         }
       }
     },
@@ -51,7 +52,8 @@
           "commit_author_email": "Commit author email",
           "notify_service": "Notify service",
           "scan_interval": "Scan interval (minutes)",
-          "notification_cooldown": "Notification cooldown (minutes)"
+          "notification_cooldown": "Notification cooldown (minutes)",
+          "remote_check_enabled": "Check for remote updates"
         }
       }
     }

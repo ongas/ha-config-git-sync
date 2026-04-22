@@ -87,6 +87,10 @@ class GitSyncStatusSensor(CoordinatorEntity, SensorEntity):
             "last_error": data.get("last_error"),
             "has_merge_conflict": data.get("has_merge_conflict", False),
             "merge_conflict_files": data.get("merge_conflict_files", []),
+            "remote_commits_behind": data.get("remote_commits_behind", 0),
+            "remote_commits_ahead": data.get("remote_commits_ahead", 0),
+            "remote_head": data.get("remote_head"),
+            "last_remote_check": data.get("last_remote_check"),
         }
 
 

@@ -7,7 +7,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant
 
-from .const import ACTION_DISMISS, ACTION_PUSH, DOMAIN, PLATFORMS
+from .const import ACTION_DISMISS, ACTION_PULL, ACTION_PULL_DISMISS, ACTION_PUSH, DOMAIN, PLATFORMS
 from .coordinator import GitSyncCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def handle_notification_action(event: Event) -> None:
         """Handle mobile_app notification action."""
         action = event.data.get("action")
-        if action in (ACTION_PUSH, ACTION_DISMISS):
+        if action in (ACTION_PUSH, ACTION_DISMISS, ACTION_PULL, ACTION_PULL_DISMISS):
             await coordinator.async_handle_action(action)
 
     entry.async_on_unload(

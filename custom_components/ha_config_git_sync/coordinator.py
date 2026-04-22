@@ -19,6 +19,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ACTION_DISMISS,
+    ACTION_PULL,
+    ACTION_PULL_DISMISS,
     ACTION_PUSH,
     CONF_BRANCH,
     CONF_COMMIT_AUTHOR_EMAIL,
@@ -26,11 +28,14 @@ from .const import (
     CONF_NOTIFICATION_COOLDOWN,
     CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
+    CONF_REMOTE_CHECK_ENABLED,
     CONF_REPO_PATH,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
     DEFAULT_DEBOUNCE_SECONDS,
+    DEFAULT_REMOTE_CHECK_ENABLED,
     DOMAIN,
+    REMOTE_FETCH_TIMEOUT,
     STATUS_CLEAN,
     STATUS_ERROR,
     STATUS_MERGE_CONFLICT,
@@ -89,6 +94,17 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._last_activity: str | None = None
         self._merge_conflict_files: list[str] = []
         self._has_merge_conflict: bool = False
+
+        # Remote change detection state
+        self._remote_check_enabled: bool = cfg.get(
+            CONF_REMOTE_CHECK_ENABLED, DEFAULT_REMOTE_CHECK_ENABLED
+        )
+        self._remote_commits_behind: int = 0
+        self._remote_commits_ahead: int = 0
+        self._remote_head: str | None = None
+        self._dismissed_remote_head: str | None = None
+        self._last_remote_check: str | None = None
+        self._last_remote_error: str | None = None
 
         scan_interval = entry.data[CONF_SCAN_INTERVAL]
 
@@ -161,7 +177,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         )
 
     async def _async_update_data(self) -> dict:
-        """Poll git status."""
+        """Poll git status and check for remote changes."""
         if self._git_operating:
             return self._build_data()
         if not self._git_available:
@@ -194,12 +210,171 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     self._status = STATUS_CLEAN
                 self._last_error = None
 
+            # Best-effort remote check — never fails the coordinator
+            await self._check_remote_changes()
+
             return self._build_data()
 
         except Exception as err:
             self._status = STATUS_ERROR
             self._last_error = str(err)
             raise UpdateFailed(f"Git status check failed: {err}") from err
+
+    async def _check_remote_changes(self) -> None:
+        """Fetch from remote and check for new commits (best-effort).
+
+        Detects whether we are behind, ahead, or diverged from the remote
+        branch. Sends an actionable pull notification only when purely
+        behind and the working tree is clean. Tracks the remote HEAD SHA
+        to avoid re-notifying for already-dismissed commits.
+        """
+        if not self._remote_check_enabled or not self._ssh_key_path:
+            return
+        if self._git_operating:
+            return
+
+        try:
+            # Fetch with timeout to avoid blocking the poll cycle
+            ssh_cmd = (
+                f"ssh -i {self._ssh_key_path} "
+                "-o StrictHostKeyChecking=no "
+                "-o UserKnownHostsFile=/dev/null "
+                "-o ConnectTimeout=10"
+            )
+            fetch_env = {"GIT_SSH_COMMAND": ssh_cmd}
+            rc, _, stderr = await asyncio.wait_for(
+                self._run_git("fetch", self._remote, env=fetch_env),
+                timeout=REMOTE_FETCH_TIMEOUT,
+            )
+            if rc != 0:
+                self._last_remote_error = f"fetch failed: {stderr}"
+                _LOGGER.debug("Remote fetch failed: %s", stderr)
+                return
+
+            # Detect ahead/behind using left-right rev-list
+            # Format: "<ahead>\t<behind>" relative to upstream
+            upstream = f"{self._remote}/{self._branch}"
+            rc, stdout, stderr = await self._run_git(
+                "rev-list", "--left-right", "--count", f"HEAD...{upstream}"
+            )
+            if rc != 0:
+                self._last_remote_error = f"rev-list failed: {stderr}"
+                _LOGGER.debug("Remote rev-list failed: %s", stderr)
+                return
+
+            parts = stdout.strip().split()
+            if len(parts) != 2:
+                self._last_remote_error = f"unexpected rev-list output: {stdout}"
+                return
+
+            ahead = int(parts[0])
+            behind = int(parts[1])
+
+            # Get the remote HEAD for cooldown tracking
+            _, remote_head, _ = await self._run_git(
+                "rev-parse", "--short", upstream
+            )
+            remote_head = remote_head.strip()
+
+            self._remote_commits_ahead = ahead
+            self._remote_commits_behind = behind
+            self._remote_head = remote_head
+            self._last_remote_check = dt_util.utcnow().isoformat()
+            self._last_remote_error = None
+
+            if behind == 0:
+                # Up to date (or only ahead) — nothing to notify
+                return
+
+            # We are behind. Check if this remote HEAD was already dismissed.
+            if remote_head == self._dismissed_remote_head:
+                return
+
+            # Get commit subjects for the notification (max 5)
+            _, log_output, _ = await self._run_git(
+                "log", "--oneline", f"HEAD..{upstream}",
+                "--format=%s", f"-{min(behind, 5)}"
+            )
+            subjects = [s for s in log_output.split("\n") if s.strip()]
+
+            await self._send_pull_notification(
+                behind=behind,
+                ahead=ahead,
+                subjects=subjects,
+                has_local_changes=bool(self._changed_files),
+            )
+
+        except asyncio.TimeoutError:
+            self._last_remote_error = "fetch timed out"
+            _LOGGER.debug("Remote fetch timed out after %ds", REMOTE_FETCH_TIMEOUT)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Remote check failed", exc_info=True)
+            self._last_remote_error = "unexpected error"
+
+    async def _send_pull_notification(
+        self,
+        *,
+        behind: int,
+        ahead: int,
+        subjects: list[str],
+        has_local_changes: bool,
+    ) -> None:
+        """Send actionable notification about available remote changes."""
+        if not self._notify_service:
+            return
+
+        service = self._notify_service
+        if service.startswith("notify."):
+            service = service[7:]
+
+        # Build message body
+        commit_list = "\n".join(f"• {s}" for s in subjects)
+        if behind > len(subjects):
+            commit_list += f"\n  (+{behind - len(subjects)} more)"
+
+        if ahead > 0:
+            # Diverged — info-only, no pull action
+            message = (
+                f"⚠️ Remote has {behind} new commit(s) but local is "
+                f"{ahead} commit(s) ahead (diverged).\n{commit_list}\n\n"
+                "Resolve manually before pulling."
+            )
+            actions = [
+                {"action": ACTION_PULL_DISMISS, "title": "Dismiss"},
+            ]
+        elif has_local_changes:
+            # Behind but dirty working tree — info-only
+            message = (
+                f"📦 {behind} new commit(s) available from Git:\n"
+                f"{commit_list}\n\n"
+                "Push or discard local changes before pulling."
+            )
+            actions = [
+                {"action": ACTION_PULL_DISMISS, "title": "Dismiss"},
+            ]
+        else:
+            # Purely behind and clean — safe to offer Pull
+            message = (
+                f"📦 {behind} new commit(s) available from Git:\n"
+                f"{commit_list}"
+            )
+            actions = [
+                {"action": ACTION_PULL, "title": "Pull Now"},
+                {"action": ACTION_PULL_DISMISS, "title": "Dismiss"},
+            ]
+
+        try:
+            await self.hass.services.async_call(
+                "notify",
+                service,
+                {
+                    "title": "Git Config Update Available",
+                    "message": message,
+                    "data": {"actions": actions},
+                },
+            )
+        except Exception:
+            _LOGGER.exception("Failed to send pull notification")
 
     def _build_data(self) -> dict:
         """Build the data dict exposed to entities."""
@@ -215,6 +390,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             "last_activity": self._last_activity,
             "has_merge_conflict": self._has_merge_conflict,
             "merge_conflict_files": self._merge_conflict_files,
+            "remote_commits_behind": self._remote_commits_behind,
+            "remote_commits_ahead": self._remote_commits_ahead,
+            "remote_head": self._remote_head,
+            "last_remote_check": self._last_remote_check,
+            "last_remote_error": self._last_remote_error,
         }
 
     def _update_progress(self, status: str, activity: str) -> None:
@@ -750,6 +930,12 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_push_commit = commit_hash
             self._last_error = None
 
+            # Reset remote state after successful pull
+            self._remote_commits_behind = 0
+            self._remote_commits_ahead = 0
+            self._remote_head = None
+            self._dismissed_remote_head = None
+
             _LOGGER.info("Successfully pulled from %s/%s: %s", self._remote, self._branch, commit_hash)
 
             # Reload YAML configuration so HA picks up the pulled files
@@ -917,6 +1103,16 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             # Reset cooldown so next poll can notify again after cooldown period
             self._last_notification = dt_util.utcnow().timestamp()
             _LOGGER.debug("User dismissed push notification")
+        elif action == ACTION_PULL:
+            _LOGGER.info("User accepted remote pull from notification")
+            await self.async_pull()
+        elif action == ACTION_PULL_DISMISS:
+            # Record the remote HEAD so we don't re-notify for these commits
+            self._dismissed_remote_head = self._remote_head
+            _LOGGER.debug(
+                "User dismissed pull notification (remote head: %s)",
+                self._remote_head,
+            )
 
     async def _notify_result(self, title: str, message: str) -> None:
         """Send a simple (non-actionable) notification."""
