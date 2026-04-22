@@ -40,7 +40,7 @@ class GitSyncPendingChangesSensor(CoordinatorEntity, BinarySensorEntity):
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": "HA Config Git Sync",
-            "manufacturer": "Custom",
+            "manufacturer": "ongas",
             "model": "Git Sync",
         }
 
@@ -80,7 +80,7 @@ class GitSyncRemoteUpdateSensor(CoordinatorEntity, BinarySensorEntity):
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": "HA Config Git Sync",
-            "manufacturer": "Custom",
+            "manufacturer": "ongas",
             "model": "Git Sync",
         }
 

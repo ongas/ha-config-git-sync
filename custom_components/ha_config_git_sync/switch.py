@@ -36,7 +36,7 @@ class GitSyncAutoPushSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": "HA Config Git Sync",
-            "manufacturer": "Custom",
+            "manufacturer": "ongas",
             "model": "Git Sync",
         }
 

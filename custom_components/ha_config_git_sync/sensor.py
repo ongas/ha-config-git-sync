@@ -46,6 +46,7 @@ class GitSyncStatusSensor(CoordinatorEntity, SensorEntity):
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": "HA Config Git Sync",
+            "manufacturer": "ongas",
             "model": "Git Sync",
         }
 
@@ -107,6 +108,7 @@ class GitSyncLastActivitySensor(CoordinatorEntity, SensorEntity):
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": "HA Config Git Sync",
+            "manufacturer": "ongas",
             "model": "Git Sync",
         }
 
