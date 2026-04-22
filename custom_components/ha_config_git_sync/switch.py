@@ -6,6 +6,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -22,7 +23,7 @@ async def async_setup_entry(
     ])
 
 
-class GitSyncAutoPushSwitch(CoordinatorEntity, SwitchEntity):
+class GitSyncAutoPushSwitch(CoordinatorEntity, RestoreEntity, SwitchEntity):
     """Switch to enable/disable automatic push of local changes."""
 
     _attr_has_entity_name = True
@@ -39,6 +40,13 @@ class GitSyncAutoPushSwitch(CoordinatorEntity, SwitchEntity):
             "manufacturer": "ongas",
             "model": "Git Sync",
         }
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous state on startup."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            self.coordinator._auto_push_enabled = last_state.state == "on"
 
     @property
     def is_on(self) -> bool:
