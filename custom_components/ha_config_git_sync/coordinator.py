@@ -22,6 +22,7 @@ from .const import (
     ACTION_PULL,
     ACTION_PULL_DISMISS,
     ACTION_PUSH,
+    CONF_AUTO_PUSH_ENABLED,
     CONF_BRANCH,
     CONF_COMMIT_AUTHOR_EMAIL,
     CONF_COMMIT_AUTHOR_NAME,
@@ -32,6 +33,7 @@ from .const import (
     CONF_REPO_PATH,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
+    DEFAULT_AUTO_PUSH_ENABLED,
     DEFAULT_DEBOUNCE_SECONDS,
     DEFAULT_REMOTE_CHECK_ENABLED,
     DOMAIN,
@@ -105,6 +107,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._dismissed_remote_head: str | None = None
         self._last_remote_check: str | None = None
         self._last_remote_error: str | None = None
+
+        # Auto-push state (toggled via switch entity at runtime)
+        self._auto_push_enabled: bool = cfg.get(
+            CONF_AUTO_PUSH_ENABLED, DEFAULT_AUTO_PUSH_ENABLED
+        )
 
         scan_interval = entry.data[CONF_SCAN_INTERVAL]
 
@@ -203,7 +210,14 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 self._changed_files = files
                 if self._status != STATUS_PUSHING:
                     self._status = STATUS_PENDING
-                    await self._maybe_notify()
+                    if self._auto_push_enabled:
+                        _LOGGER.info(
+                            "Auto-push: %d file(s) changed, pushing…",
+                            len(files),
+                        )
+                        await self.async_push()
+                    else:
+                        await self._maybe_notify()
             else:
                 self._changed_files = []
                 if self._status != STATUS_PUSHING:
@@ -395,6 +409,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             "remote_head": self._remote_head,
             "last_remote_check": self._last_remote_check,
             "last_remote_error": self._last_remote_error,
+            "auto_push_enabled": self._auto_push_enabled,
         }
 
     def _update_progress(self, status: str, activity: str) -> None:

@@ -1,7 +1,7 @@
 """Constants for HA Config Git Sync."""
 
 DOMAIN = "ha_config_git_sync"
-PLATFORMS = ["sensor", "binary_sensor", "button"]
+PLATFORMS = ["sensor", "binary_sensor", "button", "switch"]
 
 # Config keys
 CONF_REPO_PATH = "repo_path"
@@ -25,6 +25,12 @@ DEFAULT_COMMIT_AUTHOR_EMAIL = "ha-config-sync@local"
 DEFAULT_SCAN_INTERVAL = 5  # minutes (fallback poll; primary is inotify)
 DEFAULT_NOTIFICATION_COOLDOWN = 30  # minutes
 DEFAULT_DEBOUNCE_SECONDS = 5  # debounce rapid filesystem events
+
+# Config keys — auto push
+CONF_AUTO_PUSH_ENABLED = "auto_push_enabled"
+
+# Defaults — auto push
+DEFAULT_AUTO_PUSH_ENABLED = False
 
 # Config keys — remote check
 CONF_REMOTE_CHECK_ENABLED = "remote_check_enabled"

@@ -13,6 +13,7 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
+    CONF_AUTO_PUSH_ENABLED,
     CONF_BRANCH,
     CONF_COMMIT_AUTHOR_EMAIL,
     CONF_COMMIT_AUTHOR_NAME,
@@ -24,6 +25,7 @@ from .const import (
     CONF_REPO_PATH,
     CONF_SCAN_INTERVAL,
     CONF_SSH_KEY_PATH,
+    DEFAULT_AUTO_PUSH_ENABLED,
     DEFAULT_BRANCH,
     DEFAULT_COMMIT_AUTHOR_EMAIL,
     DEFAULT_COMMIT_AUTHOR_NAME,
@@ -162,6 +164,10 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_REMOTE_CHECK_ENABLED,
                         default=DEFAULT_REMOTE_CHECK_ENABLED,
+                    ): bool,
+                    vol.Required(
+                        CONF_AUTO_PUSH_ENABLED,
+                        default=DEFAULT_AUTO_PUSH_ENABLED,
                     ): bool,
                 }
             ),
@@ -309,6 +315,12 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
                         CONF_REMOTE_CHECK_ENABLED,
                         default=current.get(
                             CONF_REMOTE_CHECK_ENABLED, DEFAULT_REMOTE_CHECK_ENABLED
+                        ),
+                    ): bool,
+                    vol.Required(
+                        CONF_AUTO_PUSH_ENABLED,
+                        default=current.get(
+                            CONF_AUTO_PUSH_ENABLED, DEFAULT_AUTO_PUSH_ENABLED
                         ),
                     ): bool,
                 }
