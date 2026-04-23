@@ -1130,19 +1130,16 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             )
 
     async def _notify_result(self, title: str, message: str) -> None:
-        """Send a simple (non-actionable) notification."""
-        if not self._notify_service:
-            return
-
-        service = self._notify_service
-        if service.startswith("notify."):
-            service = service[7:]
-
+        """Send a persistent notification to HA panel only."""
         try:
             await self.hass.services.async_call(
-                "notify",
-                service,
-                {"title": title, "message": message},
+                "persistent_notification",
+                "create",
+                {
+                    "title": title,
+                    "message": message,
+                    "notification_id": f"ha_git_sync_{title.lower().replace(' ', '_')}",
+                },
             )
         except Exception:
             _LOGGER.exception("Failed to send result notification")
