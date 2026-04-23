@@ -19,7 +19,6 @@ from .const import (
     CONF_COMMIT_AUTHOR_NAME,
     CONF_INIT_GIT,
     CONF_NOTIFICATION_COOLDOWN,
-    CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
     CONF_REMOTE_CHECK_ENABLED,
     CONF_REPO_PATH,
@@ -153,7 +152,6 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_COMMIT_AUTHOR_EMAIL, default=DEFAULT_COMMIT_AUTHOR_EMAIL
                     ): str,
-                    vol.Optional(CONF_NOTIFY_SERVICE, default=""): str,
                     vol.Required(
                         CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
                     ): vol.All(int, vol.Range(min=1, max=60)),
@@ -296,10 +294,6 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
                         default=current.get(
                             CONF_COMMIT_AUTHOR_EMAIL, DEFAULT_COMMIT_AUTHOR_EMAIL
                         ),
-                    ): str,
-                    vol.Optional(
-                        CONF_NOTIFY_SERVICE,
-                        default=current.get(CONF_NOTIFY_SERVICE, ""),
                     ): str,
                     vol.Required(
                         CONF_SCAN_INTERVAL,
