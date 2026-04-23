@@ -27,7 +27,7 @@ class GitSyncAutoPushSwitch(CoordinatorEntity, RestoreEntity, SwitchEntity):
     """Switch to enable/disable automatic push of local changes."""
 
     _attr_has_entity_name = True
-    _attr_name = "Auto-sync Local Changes"
+    _attr_name = "Auto-push local to Git"
     _attr_icon = "mdi:source-branch-sync"
 
     def __init__(self, coordinator: GitSyncCoordinator, entry: ConfigEntry) -> None:
