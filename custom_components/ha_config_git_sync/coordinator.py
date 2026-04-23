@@ -27,7 +27,6 @@ from .const import (
     CONF_COMMIT_AUTHOR_EMAIL,
     CONF_COMMIT_AUTHOR_NAME,
     CONF_NOTIFICATION_COOLDOWN,
-    CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
     CONF_REMOTE_CHECK_ENABLED,
     CONF_REPO_PATH,
@@ -78,7 +77,6 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._ssh_key_path: str = cfg[CONF_SSH_KEY_PATH]
         self._author_name: str = cfg[CONF_COMMIT_AUTHOR_NAME]
         self._author_email: str = cfg[CONF_COMMIT_AUTHOR_EMAIL]
-        self._notify_service: str = cfg[CONF_NOTIFY_SERVICE]
         self._cooldown_minutes: int = cfg[CONF_NOTIFICATION_COOLDOWN]
 
         self._last_notification: float | None = None
@@ -105,6 +103,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._remote_commits_ahead: int = 0
         self._remote_head: str | None = None
         self._dismissed_remote_head: str | None = None
+        self._notified_remote_head: str | None = None
         self._last_remote_check: str | None = None
         self._last_remote_error: str | None = None
 
@@ -300,8 +299,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 # Up to date (or only ahead) — nothing to notify
                 return
 
-            # We are behind. Check if this remote HEAD was already dismissed.
+            # We are behind. Check if already notified or dismissed.
             if remote_head == self._dismissed_remote_head:
+                return
+            if remote_head == self._notified_remote_head:
                 return
 
             # Get commit subjects for the notification (max 5)
@@ -317,6 +318,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 subjects=subjects,
                 has_local_changes=bool(self._changed_files),
             )
+            self._notified_remote_head = remote_head
 
         except asyncio.TimeoutError:
             self._last_remote_error = "fetch timed out"
@@ -333,62 +335,31 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         subjects: list[str],
         has_local_changes: bool,
     ) -> None:
-        """Send actionable notification about available remote changes."""
-        if not self._notify_service:
-            return
-
-        service = self._notify_service
-        if service.startswith("notify."):
-            service = service[7:]
-
+        """Send notification about available remote changes to HA panel."""
         # Build message body
         commit_list = "\n".join(f"• {s}" for s in subjects)
         if behind > len(subjects):
             commit_list += f"\n  (+{behind - len(subjects)} more)"
 
         if ahead > 0:
-            # Diverged — info-only, no pull action
             message = (
                 f"⚠️ Remote has {behind} new commit(s) but local is "
                 f"{ahead} commit(s) ahead (diverged).\n{commit_list}\n\n"
                 "Resolve manually before pulling."
             )
-            actions = [
-                {"action": ACTION_PULL_DISMISS, "title": "Dismiss"},
-            ]
         elif has_local_changes:
-            # Behind but dirty working tree — info-only
             message = (
                 f"📦 {behind} new commit(s) available from Git:\n"
                 f"{commit_list}\n\n"
                 "Push or discard local changes before pulling."
             )
-            actions = [
-                {"action": ACTION_PULL_DISMISS, "title": "Dismiss"},
-            ]
         else:
-            # Purely behind and clean — safe to offer Pull
             message = (
                 f"📦 {behind} new commit(s) available from Git:\n"
                 f"{commit_list}"
             )
-            actions = [
-                {"action": ACTION_PULL, "title": "Pull Now"},
-                {"action": ACTION_PULL_DISMISS, "title": "Dismiss"},
-            ]
 
-        try:
-            await self.hass.services.async_call(
-                "notify",
-                service,
-                {
-                    "title": "Git Config Update Available",
-                    "message": message,
-                    "data": {"actions": actions},
-                },
-            )
-        except Exception:
-            _LOGGER.exception("Failed to send pull notification")
+        await self._notify_result("Git Config Update Available", message)
 
     def _build_data(self) -> dict:
         """Build the data dict exposed to entities."""
@@ -420,9 +391,6 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
     async def _maybe_notify(self) -> None:
         """Send notification if cooldown allows."""
-        if not self._notify_service:
-            return
-
         now = dt_util.utcnow().timestamp()
         if self._last_notification:
             elapsed_minutes = (now - self._last_notification) / 60
@@ -433,35 +401,15 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._last_notification = now
 
     async def _send_notification(self) -> None:
-        """Send actionable notification to user's device."""
+        """Send notification about local changes to HA panel."""
         files_str = ", ".join(self._changed_files[:5])
         if len(self._changed_files) > 5:
             files_str += f" (+{len(self._changed_files) - 5} more)"
 
-        # Extract service name (strip "notify." prefix if present)
-        service = self._notify_service
-        if service.startswith("notify."):
-            service = service[7:]
-
-        try:
-            await self.hass.services.async_call(
-                "notify",
-                service,
-                {
-                    "title": "HA Config Changed",
-                    "message": (
-                        f"{len(self._changed_files)} file(s) modified: {files_str}"
-                    ),
-                    "data": {
-                        "actions": [
-                            {"action": ACTION_PUSH, "title": "Push to Git"},
-                            {"action": ACTION_DISMISS, "title": "Dismiss"},
-                        ],
-                    },
-                },
-            )
-        except Exception:
-            _LOGGER.exception("Failed to send notification")
+        await self._notify_result(
+            "HA Config Changed",
+            f"{len(self._changed_files)} file(s) modified: {files_str}",
+        )
 
     async def async_push(self) -> None:
         """Commit all changes and push to remote."""
@@ -950,6 +898,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._remote_commits_ahead = 0
             self._remote_head = None
             self._dismissed_remote_head = None
+            self._notified_remote_head = None
 
             _LOGGER.info("Successfully pulled from %s/%s: %s", self._remote, self._branch, commit_hash)
 
