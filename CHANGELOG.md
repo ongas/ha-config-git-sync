@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.13.0] — 2026-04-24
+
+### Added
+
+- **Auto-sync unpushed commits** — Detects committed-but-unpushed local commits (e.g., "branch ahead of origin by N commits") and automatically pushes them when auto-sync is enabled. Previously only uncommitted file changes triggered a push.
+- **Manual push handles ahead commits** — The "Push to git" button now detects and pushes unpushed commits even when the working tree is clean.
+- New coordinator methods: `_count_unpushed_commits()` (local `rev-list` check, no network needed), `_auto_push_ahead_commits()`, `_push_to_remote()`.
+
+### Fixed
+
+- **Auto-sync setting now actually works** — Removed the non-functional `auto_push_enabled` toggle from config/options flow. The switch entity on the device page is now the sole control, as intended.
+- **SSH command conditional** — `_push_to_remote()` only sets `GIT_SSH_COMMAND` when an SSH key is configured, supporting local remotes without SSH.
+
+### Changed
+
+- Renamed switch entity from "Auto-push local to Git" to "Auto-sync local changes" for clarity.
+- Removed `auto_push_enabled` from `strings.json` and `translations/en.json`.
+
 ## [1.9.8] — 2026-04-21
 
 ### Fixed
