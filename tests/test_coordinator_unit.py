@@ -176,8 +176,11 @@ class TestPush:
 
         # git status --porcelain returns empty (no changes)
         status_proc = _mock_process(returncode=0, stdout=b"")
+        # rev-list --count returns 0 (not ahead of remote)
+        revlist_proc = _mock_process(returncode=0, stdout=b"0")
 
-        with patch("asyncio.create_subprocess_exec", return_value=status_proc):
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, revlist_proc]):
             await coord.async_push()
 
         assert coord._last_activity == "No changes to sync"

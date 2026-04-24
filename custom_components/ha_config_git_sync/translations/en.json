@@ -29,8 +29,7 @@
           "notify_service": "Notify service (e.g. mobile_app)",
           "scan_interval": "Scan interval (minutes)",
           "notification_cooldown": "Notification cooldown (minutes)",
-          "remote_check_enabled": "Check for remote updates",
-          "auto_push_enabled": "Auto-sync local changes"
+          "remote_check_enabled": "Check for remote updates"
         }
       }
     },
@@ -54,8 +53,7 @@
           "notify_service": "Notify service",
           "scan_interval": "Scan interval (minutes)",
           "notification_cooldown": "Notification cooldown (minutes)",
-          "remote_check_enabled": "Check for remote updates",
-          "auto_push_enabled": "Auto-sync local changes"
+          "remote_check_enabled": "Check for remote updates"
         }
       }
     }

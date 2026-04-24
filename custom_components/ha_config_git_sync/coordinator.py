@@ -223,6 +223,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     self._status = STATUS_CLEAN
                 self._last_error = None
 
+                # Auto-sync: push any committed-but-unpushed local commits
+                if self._auto_push_enabled:
+                    await self._auto_push_ahead_commits()
+
             # Best-effort remote check — never fails the coordinator
             await self._check_remote_changes()
 
@@ -411,6 +415,91 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             f"{len(self._changed_files)} file(s) modified: {files_str}",
         )
 
+    async def _count_unpushed_commits(self) -> int:
+        """Return the number of local commits not yet pushed to the remote.
+
+        Returns 0 if the upstream ref does not exist (e.g. first push)
+        or the command fails for any reason.
+        """
+        upstream = f"{self._remote}/{self._branch}"
+        rc, count_str, _ = await self._run_git(
+            "rev-list", "--count", f"{upstream}..HEAD"
+        )
+        if rc != 0 or not count_str.strip().isdigit():
+            return 0
+        return int(count_str.strip())
+
+    async def _auto_push_ahead_commits(self) -> None:
+        """Push committed-but-unpushed changes when auto-sync is enabled.
+
+        Called from the clean-tree path in _async_update_data().
+        Only pushes when there are local commits ahead of the remote.
+        """
+        ahead = await self._count_unpushed_commits()
+        if ahead <= 0:
+            return
+        _LOGGER.info("Auto-sync: %d unpushed commit(s), pushing to remote…", ahead)
+        await self._push_to_remote()
+
+    async def _push_to_remote(self) -> None:
+        """Push existing local commits to the remote (no staging/committing)."""
+        self._git_operating = True
+        self._update_progress(STATUS_PUSHING, f"Pushing to {self._remote}…")
+
+        try:
+            push_env = {}
+            if self._ssh_key_path:
+                ssh_cmd = (
+                    f"ssh -i {self._ssh_key_path} "
+                    "-o StrictHostKeyChecking=no "
+                    "-o UserKnownHostsFile=/dev/null"
+                )
+                push_env = {"GIT_SSH_COMMAND": ssh_cmd}
+            rc, _, stderr = await self._run_git(
+                "push", self._remote, self._branch, env=push_env
+            )
+            if rc != 0:
+                raise RuntimeError(f"git push failed: {stderr}")
+
+            _, commit_hash, _ = await self._run_git(
+                "rev-parse", "--short", "HEAD"
+            )
+            commit_hash = commit_hash.strip()
+
+            self._last_push = dt_util.utcnow().isoformat()
+            self._last_push_commit = commit_hash
+            self._last_error = None
+            self._last_notification = None  # Reset cooldown
+            self._remote_commits_ahead = 0
+
+            self._update_progress(
+                STATUS_CLEAN, f"Pushed {commit_hash} to {self._remote}"
+            )
+            _LOGGER.info(
+                "Successfully pushed to %s/%s (HEAD: %s)",
+                self._remote,
+                self._branch,
+                commit_hash,
+            )
+
+            await self._notify_result(
+                "Config Pushed to Git",
+                f"Pushed local commits to {self._remote}/{self._branch} "
+                f"(HEAD: {commit_hash})",
+            )
+
+        except Exception as err:
+            self._status = STATUS_ERROR
+            self._last_error = str(err)
+            self._last_activity = f"Push failed: {err}"
+            _LOGGER.error("Git push failed: %s", err)
+
+            await self._notify_result("Git Push Failed", str(err))
+
+        finally:
+            self._git_operating = False
+            self.async_set_updated_data(self._build_data())
+
     async def async_push(self) -> None:
         """Commit all changes and push to remote."""
         _LOGGER.info("Sync button pressed — checking for changes")
@@ -427,6 +516,15 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 self._changed_files = files
 
         if not self._changed_files:
+            # No uncommitted changes — check for unpushed commits
+            ahead = await self._count_unpushed_commits()
+            if ahead > 0:
+                _LOGGER.info(
+                    "No uncommitted changes but %d unpushed commit(s), pushing…",
+                    ahead,
+                )
+                await self._push_to_remote()
+                return
             _LOGGER.info("No changes detected — repository is clean")
             self._last_activity = "No changes to sync"
             self.async_set_updated_data(self._build_data())

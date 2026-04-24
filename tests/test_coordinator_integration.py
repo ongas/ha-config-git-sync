@@ -558,3 +558,124 @@ class TestRealGitUndo:
         log = _git(repo, "log", "-1", "--format=%an <%ae>")
         assert "Integration Test" in log
         assert "test@integration.local" in log
+
+
+# ---------------------------------------------------------------------------
+# 6. Auto-sync: push committed-but-unpushed changes
+# ---------------------------------------------------------------------------
+
+class TestAutoSyncAheadCommits:
+
+    @pytest.mark.asyncio
+    async def test_push_button_pushes_ahead_commits(self, fake_hass, git_repo):
+        """Manual push with clean tree but unpushed commits should push."""
+        repo = git_repo["repo_path"]
+        remote = git_repo["remote_path"]
+
+        # Create a commit locally without pushing
+        Path(repo, "configuration.yaml").write_text("local change\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "local only commit")
+
+        before_remote = _git(remote, "log", "--oneline", "-1", "main")
+
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+
+        # Tree is clean, but we're 1 commit ahead
+        data = await coord._async_update_data()
+        assert data["status"] == STATUS_CLEAN
+
+        # Manual push should detect and push the ahead commit
+        await coord.async_push()
+
+        after_remote = _git(remote, "log", "--oneline", "-1", "main")
+        assert after_remote != before_remote
+        assert coord._status == STATUS_CLEAN
+        assert coord._last_push_commit is not None
+
+    @pytest.mark.asyncio
+    async def test_auto_sync_pushes_ahead_commits(self, fake_hass, git_repo):
+        """Auto-sync should push committed-but-unpushed changes on poll."""
+        repo = git_repo["repo_path"]
+        remote = git_repo["remote_path"]
+
+        # Create commits locally without pushing
+        Path(repo, "configuration.yaml").write_text("auto sync test\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "unpushed commit 1")
+        Path(repo, "automations.yaml").write_text("- id: test\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "unpushed commit 2")
+
+        before_remote = _git(remote, "log", "--oneline", "-1", "main")
+
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+        coord._auto_push_enabled = True
+
+        data = await coord._async_update_data()
+
+        after_remote = _git(remote, "log", "--oneline", "-1", "main")
+        assert after_remote != before_remote
+        assert coord._status == STATUS_CLEAN
+        assert coord._last_push_commit is not None
+
+    @pytest.mark.asyncio
+    async def test_auto_sync_disabled_does_not_push_ahead(self, fake_hass, git_repo):
+        """With auto-sync off, ahead commits should NOT be auto-pushed."""
+        repo = git_repo["repo_path"]
+        remote = git_repo["remote_path"]
+
+        Path(repo, "configuration.yaml").write_text("no auto push\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "should not auto-push")
+
+        before_remote = _git(remote, "log", "--oneline", "-1", "main")
+
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+        coord._auto_push_enabled = False
+
+        await coord._async_update_data()
+
+        after_remote = _git(remote, "log", "--oneline", "-1", "main")
+        assert after_remote == before_remote  # Nothing pushed
+
+    @pytest.mark.asyncio
+    async def test_push_no_changes_no_ahead_is_noop(self, fake_hass, git_repo):
+        """Push with clean tree and no ahead commits does nothing."""
+        repo = git_repo["repo_path"]
+
+        before_hash = _git(repo, "rev-parse", "HEAD")
+
+        entry = _make_entry(repo)
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+
+        await coord._async_update_data()
+        assert coord._status == STATUS_CLEAN
+
+        await coord.async_push()
+
+        after_hash = _git(repo, "rev-parse", "HEAD")
+        assert before_hash == after_hash
+        assert coord._last_activity == "No changes to sync"
+
+    @pytest.mark.asyncio
+    async def test_count_unpushed_with_no_upstream(self, fake_hass, git_repo):
+        """_count_unpushed_commits returns 0 when upstream ref is missing."""
+        repo = git_repo["repo_path"]
+
+        entry = _make_entry(repo)
+        # Point at a non-existent remote/branch
+        entry.data["remote"] = "nonexistent"
+        entry.data["branch"] = "nope"
+        coord = GitSyncCoordinator(fake_hass, entry)
+        await coord.async_setup()
+
+        count = await coord._count_unpushed_commits()
+        assert count == 0
