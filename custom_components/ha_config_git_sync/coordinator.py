@@ -10,6 +10,7 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
+import yaml
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -27,6 +28,7 @@ from .const import (
     CONF_COMMIT_AUTHOR_EMAIL,
     CONF_COMMIT_AUTHOR_NAME,
     CONF_NOTIFICATION_COOLDOWN,
+    CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
     CONF_REMOTE_CHECK_ENABLED,
     CONF_REPO_PATH,
@@ -34,6 +36,7 @@ from .const import (
     CONF_SSH_KEY_PATH,
     DEFAULT_AUTO_PUSH_ENABLED,
     DEFAULT_DEBOUNCE_SECONDS,
+    DEFAULT_NOTIFY_SERVICE,
     DEFAULT_REMOTE_CHECK_ENABLED,
     DOMAIN,
     REMOTE_FETCH_TIMEOUT,
@@ -78,6 +81,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._author_name: str = cfg[CONF_COMMIT_AUTHOR_NAME]
         self._author_email: str = cfg[CONF_COMMIT_AUTHOR_EMAIL]
         self._cooldown_minutes: int = cfg[CONF_NOTIFICATION_COOLDOWN]
+        self._notify_service: str = cfg.get(CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICE)
+        self._entry_id: str = entry.entry_id
 
         self._last_notification: float | None = None
         self._status: str = STATUS_CLEAN
@@ -339,7 +344,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         subjects: list[str],
         has_local_changes: bool,
     ) -> None:
-        """Send notification about available remote changes to HA panel."""
+        """Send notification about available remote changes to HA panel and mobile."""
         # Build message body
         commit_list = "\n".join(f"• {s}" for s in subjects)
         if behind > len(subjects):
@@ -363,7 +368,20 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 f"{commit_list}"
             )
 
-        await self._notify_result("Git Config Update Available", message)
+        title = "Git Config Update Available"
+        await self._notify_result(title, message)
+
+        # Only offer Pull action on mobile when it's safe to pull
+        if ahead == 0 and not has_local_changes:
+            await self._send_mobile_notification(
+                title,
+                message,
+                actions=[
+                    {"action": ACTION_PULL, "title": "Pull Now"},
+                    {"action": ACTION_PULL_DISMISS, "title": "Dismiss"},
+                ],
+                tag="ha_git_sync_pull",
+            )
 
     def _build_data(self) -> dict:
         """Build the data dict exposed to entities."""
@@ -405,14 +423,23 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._last_notification = now
 
     async def _send_notification(self) -> None:
-        """Send notification about local changes to HA panel."""
+        """Send notification about local changes to HA panel and mobile."""
         files_str = ", ".join(self._changed_files[:5])
         if len(self._changed_files) > 5:
             files_str += f" (+{len(self._changed_files) - 5} more)"
 
-        await self._notify_result(
-            "HA Config Changed",
-            f"{len(self._changed_files)} file(s) modified: {files_str}",
+        title = "HA Config Changed"
+        message = f"{len(self._changed_files)} file(s) modified: {files_str}"
+
+        await self._notify_result(title, message)
+        await self._send_mobile_notification(
+            title,
+            message,
+            actions=[
+                {"action": ACTION_PUSH, "title": "Sync Now"},
+                {"action": ACTION_DISMISS, "title": "Dismiss"},
+            ],
+            tag="ha_git_sync_push",
         )
 
     async def _count_unpushed_commits(self) -> int:
@@ -527,6 +554,17 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 return
             _LOGGER.info("No changes detected — repository is clean")
             self._last_activity = "No changes to sync"
+            self.async_set_updated_data(self._build_data())
+            return
+
+        # Skip commits that are purely YAML formatting noise
+        if await self._is_formatting_only():
+            # Discard the cosmetic changes to keep the tree clean
+            for filepath in self._changed_files:
+                await self._run_git("checkout", "--", filepath)
+            self._changed_files = []
+            self._status = STATUS_CLEAN
+            self._last_activity = "Skipped formatting-only changes"
             self.async_set_updated_data(self._build_data())
             return
 
@@ -1175,6 +1213,96 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 "User dismissed pull notification (remote head: %s)",
                 self._remote_head,
             )
+
+    async def _send_mobile_notification(
+        self,
+        title: str,
+        message: str,
+        actions: list[dict[str, str]] | None = None,
+        tag: str | None = None,
+    ) -> None:
+        """Send an actionable notification to the configured mobile device.
+
+        Skips silently if no notify_service is configured or the service
+        is not registered in HA.
+        """
+        if not self._notify_service:
+            return
+
+        # Parse "notify.mobile_app_xxx" or "mobile_app_xxx" into service name
+        service_name = self._notify_service
+        if service_name.startswith("notify."):
+            service_name = service_name[len("notify."):]
+
+        # Validate the service exists before calling
+        if not self.hass.services.has_service("notify", service_name):
+            _LOGGER.warning(
+                "Notify service 'notify.%s' not found — skipping mobile notification",
+                service_name,
+            )
+            return
+
+        data: dict = {}
+        if actions:
+            data["actions"] = actions
+        if tag:
+            data["tag"] = tag
+
+        payload: dict = {"title": title, "message": message}
+        if data:
+            payload["data"] = data
+
+        try:
+            await self.hass.services.async_call("notify", service_name, payload)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to send mobile notification via notify.%s", service_name)
+
+    async def _is_formatting_only(self) -> bool:
+        """Check if all pending changes are YAML formatting-only (no semantic diff).
+
+        Compares the HEAD version of each changed YAML file with the working
+        tree version by parsing both through PyYAML. If the parsed data
+        structures are identical for ALL changed files, the changes are
+        purely cosmetic (line wrapping, quote style, etc.).
+
+        Non-YAML files or parse failures are treated as real changes.
+        Returns True only when every change is formatting-only.
+        """
+        if not self._changed_files:
+            return False
+
+        for filepath in self._changed_files:
+            if not filepath.endswith((".yaml", ".yml")):
+                return False  # Non-YAML file — always a real change
+
+            full_path = Path(self._repo_path) / filepath
+
+            try:
+                # Get HEAD version from git
+                rc, head_content, _ = await self._run_git("show", f"HEAD:{filepath}")
+                if rc != 0:
+                    return False  # New file or git error — treat as real change
+
+                # Read working tree version
+                working_content = await self.hass.async_add_executor_job(
+                    full_path.read_text, "utf-8"
+                )
+
+                # Parse and compare
+                head_data = yaml.safe_load(head_content)
+                working_data = yaml.safe_load(working_content)
+
+                if head_data != working_data:
+                    return False  # Semantic difference — real change
+            except Exception:  # noqa: BLE001
+                # Any error (file read, YAML parse, etc.) — treat as real change
+                return False
+
+        _LOGGER.info(
+            "All %d changed file(s) are formatting-only — skipping commit",
+            len(self._changed_files),
+        )
+        return True
 
     async def _notify_result(self, title: str, message: str) -> None:
         """Send a persistent notification to HA panel only."""

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.14.0] — 2026-04-24
+
+### Added
+
+- **Mobile push notifications** — Sends actionable notifications to a configured mobile device (via HA Companion App) with "Sync Now" / "Dismiss" buttons for local changes and "Pull Now" / "Dismiss" for remote changes. Configurable in integration options (`notify_service` field). Uses notification tags to prevent stacking and respects the existing cooldown to avoid spam.
+- **YAML formatting-only commit suppression** — Detects when pending changes are purely cosmetic YAML reformatting (line wrapping, quote style differences) by comparing parsed YAML structures. Automatically discards these changes instead of creating meaningless commits. Applies to both manual sync and auto-push.
+
+### Changed
+
+- Notifications now send both persistent notifications (HA UI) and mobile notifications (when configured).
+- Pull notifications only show the "Pull Now" action when safe (no local ahead commits or uncommitted changes).
+
 ## [1.13.1] — 2026-04-24
 
 ### Changed

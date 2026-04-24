@@ -128,6 +128,7 @@ def fake_hass():
     hass = MagicMock()
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
+    hass.async_add_executor_job = AsyncMock()
     hass.bus = MagicMock()
     hass.bus.async_listen = MagicMock(return_value=lambda: None)
     return hass

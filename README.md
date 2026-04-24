@@ -13,6 +13,8 @@ A Home Assistant custom integration that detects configuration changes made via 
 
 ### User Interface & Notifications
 - **Persistent notifications** — alerts you when changes are detected, with options to push, dismiss, or view details
+- **Mobile push notifications** — sends actionable notifications to a configured mobile device (via HA Companion App) with "Sync Now" and "Dismiss" buttons; uses notification tags to prevent stacking and respects cooldown to avoid spam
+- **Pull notifications** — notifies when remote changes are available; mobile "Pull Now" action only shown when safe (no local ahead commits or uncommitted changes)
 - **Dashboard entities:**
   - `sensor.ha_config_git_sync_status` — status: `clean`, `pending_changes`, `pushing`, or `error`
   - `sensor.ha_config_git_sync_last_activity` — description of the last action (push, undo, redo, pull, or error)
@@ -22,6 +24,7 @@ A Home Assistant custom integration that detects configuration changes made via 
   - `button.ha_config_git_sync_undo_last_change` — undo / redo toggle
 
 ### Advanced Features
+- **YAML formatting-only commit suppression** — automatically detects when pending changes are purely cosmetic YAML reformatting (line wrapping, quote style) and discards them instead of creating meaningless commits
 - **Undo / redo** — reverts the last commit with `git revert HEAD`; press again to redo (toggle). Changes are automatically reloaded.
 - **Status attributes** — sensor shows changed file list, commit hashes, timestamps, and error details
 - **Configurable via UI** — Settings → Integrations → HA Config Git Sync → Configure

@@ -193,13 +193,14 @@ class TestPush:
         coord._status = STATUS_PENDING
 
         status_proc = _mock_process(returncode=0, stdout=b" M configuration.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=0)
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, show_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_CLEAN
@@ -214,10 +215,11 @@ class TestPush:
         coord._changed_files = ["file.yaml"]
 
         status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=1, stderr=b"git add failed")
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc]):
+                    side_effect=[status_proc, show_proc, add_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_ERROR
@@ -229,11 +231,12 @@ class TestPush:
         coord._changed_files = ["file.yaml"]
 
         status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=1, stderr=b"nothing to commit")
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc, commit_proc]):
+                    side_effect=[status_proc, show_proc, add_proc, commit_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_ERROR
@@ -244,13 +247,14 @@ class TestPush:
         coord._changed_files = ["file.yaml"]
 
         status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=1, stderr=b"permission denied")
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, show_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_push()
 
         assert coord._status == STATUS_ERROR
@@ -276,9 +280,9 @@ class TestPush:
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
             await coord.async_push()
 
-        # Third call is commit (after status + add) — args: "git", "commit", "-m", <message>
-        commit_call = captured_args[2]
-        message = commit_call[3]  # "-m" argument value
+        # Find the commit call by looking for "-m" argument
+        commit_call = next(c for c in captured_args if "commit" in c and "-m" in c)
+        message = commit_call[commit_call.index("-m") + 1]
         assert "file1.yaml" in message
         assert "file2.yaml" in message
 
@@ -300,8 +304,8 @@ class TestPush:
         with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
             await coord.async_push()
 
-        commit_call = captured_args[2]
-        message = commit_call[3]
+        commit_call = next(c for c in captured_args if "commit" in c and "-m" in c)
+        message = commit_call[commit_call.index("-m") + 1]
         assert "(+5 more)" in message
 # 4. Notification logic
 # ---------------------------------------------------------------------------
@@ -309,7 +313,8 @@ class TestPush:
 class TestNotifications:
 
     @pytest.mark.asyncio
-    async def test_notification_sent_on_pending(self, fake_hass, fake_entry):
+    async def test_persistent_notification_sent_on_pending(self, fake_hass, fake_entry):
+        """Pending changes should always send a persistent_notification."""
         coord = _make_coordinator(fake_hass, fake_entry,
                                    {"notify_service": "notify.mobile_app_phone"})
         coord._git_available = True
@@ -320,10 +325,33 @@ class TestNotifications:
         with patch("asyncio.create_subprocess_exec", return_value=proc):
             await coord._async_update_data()
 
-        fake_hass.services.async_call.assert_called_once()
-        call_args = fake_hass.services.async_call.call_args
-        assert call_args[0][0] == "notify"
-        assert call_args[0][1] == "mobile_app_phone"
+        calls = fake_hass.services.async_call.call_args_list
+        persistent_calls = [c for c in calls if c[0][0] == "persistent_notification"]
+        assert len(persistent_calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_mobile_notification_sent_on_pending(self, fake_hass, fake_entry):
+        """Pending changes should also send a mobile notification with actions."""
+        coord = _make_coordinator(fake_hass, fake_entry,
+                                   {"notify_service": "notify.mobile_app_phone"})
+        coord._git_available = True
+        coord._last_notification = None
+
+        porcelain = b" M configuration.yaml\n"
+        proc = _mock_process(returncode=0, stdout=porcelain)
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            await coord._async_update_data()
+
+        calls = fake_hass.services.async_call.call_args_list
+        mobile_calls = [c for c in calls if c[0][0] == "notify"]
+        assert len(mobile_calls) >= 1
+        assert mobile_calls[0][0][1] == "mobile_app_phone"
+        # Should include actionable buttons
+        payload = mobile_calls[0][0][2]
+        assert "data" in payload
+        assert "actions" in payload["data"]
+        action_names = [a["action"] for a in payload["data"]["actions"]]
+        assert ACTION_PUSH in action_names
 
     @pytest.mark.asyncio
     async def test_notification_respects_cooldown(self, fake_hass, fake_entry):
@@ -341,20 +369,47 @@ class TestNotifications:
         with patch("asyncio.create_subprocess_exec", return_value=proc):
             await coord._async_update_data()
 
-        # Should NOT send — cooldown not elapsed
+        # Should NOT send — cooldown not elapsed (no persistent or mobile)
         fake_hass.services.async_call.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_notification_when_service_empty(self, fake_hass, fake_entry):
+    async def test_no_mobile_notification_when_service_empty(self, fake_hass, fake_entry):
+        """Empty notify_service should still send persistent_notification but skip mobile."""
         coord = _make_coordinator(fake_hass, fake_entry, {"notify_service": ""})
         coord._git_available = True
+        coord._last_notification = None
 
         porcelain = b" M configuration.yaml\n"
         proc = _mock_process(returncode=0, stdout=porcelain)
         with patch("asyncio.create_subprocess_exec", return_value=proc):
             await coord._async_update_data()
 
-        fake_hass.services.async_call.assert_not_called()
+        calls = fake_hass.services.async_call.call_args_list
+        # Persistent notification should still be sent
+        persistent_calls = [c for c in calls if c[0][0] == "persistent_notification"]
+        assert len(persistent_calls) >= 1
+        # No mobile notification
+        mobile_calls = [c for c in calls if c[0][0] == "notify"]
+        assert len(mobile_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_mobile_notification_uses_tag(self, fake_hass, fake_entry):
+        """Mobile notifications should include a tag to prevent stacking."""
+        coord = _make_coordinator(fake_hass, fake_entry,
+                                   {"notify_service": "notify.mobile_app_phone"})
+        coord._git_available = True
+        coord._last_notification = None
+
+        porcelain = b" M configuration.yaml\n"
+        proc = _mock_process(returncode=0, stdout=porcelain)
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            await coord._async_update_data()
+
+        calls = fake_hass.services.async_call.call_args_list
+        mobile_calls = [c for c in calls if c[0][0] == "notify"]
+        assert len(mobile_calls) >= 1
+        payload = mobile_calls[0][0][2]
+        assert payload["data"]["tag"] == "ha_git_sync_push"
 
     @pytest.mark.asyncio
     async def test_push_success_sends_result_notification(self, fake_hass, fake_entry):
@@ -363,13 +418,14 @@ class TestNotifications:
         coord._changed_files = ["file.yaml"]
 
         status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=0)
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, show_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_push()
 
         # At least one call should be the success notification
@@ -383,10 +439,11 @@ class TestNotifications:
         coord._changed_files = ["file.yaml"]
 
         status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=1, stderr=b"add failed")
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc]):
+                    side_effect=[status_proc, show_proc, add_proc]):
             await coord.async_push()
 
         calls = fake_hass.services.async_call.call_args_list
@@ -405,13 +462,14 @@ class TestActionHandling:
         coord._changed_files = ["file.yaml"]
 
         status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=0)
         commit_proc = _mock_process(returncode=0)
         rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
         push_proc = _mock_process(returncode=0)
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
+                    side_effect=[status_proc, show_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
             await coord.async_handle_action(ACTION_PUSH)
 
         assert coord._status == STATUS_CLEAN
@@ -696,6 +754,7 @@ class TestUndoState:
 
         calls = [
             _mock_process(returncode=0, stdout=b" M file.yaml\n"),  # git status
+            _mock_process(returncode=0, stdout=b"old: content"),  # git show HEAD:file.yaml
             _mock_process(returncode=0),          # git add
             _mock_process(returncode=0),          # git commit
             _mock_process(returncode=0, stdout=b"abc1234"),  # rev-parse
@@ -751,6 +810,7 @@ class TestUndoState:
 
         calls = [
             _mock_process(returncode=0, stdout=b" M automations.yaml\n"),  # git status
+            _mock_process(returncode=0, stdout=b"old: content"),  # git show HEAD:automations.yaml
             _mock_process(returncode=0),          # git add
             _mock_process(returncode=0),          # git commit
             _mock_process(returncode=0, stdout=b"abc1234"),  # rev-parse
@@ -772,6 +832,7 @@ class TestUndoState:
 
         calls = [
             _mock_process(returncode=0, stdout=b" M test.yaml\n"),  # git status
+            _mock_process(returncode=0, stdout=b"old: content"),  # git show HEAD:test.yaml
             _mock_process(returncode=1, stderr=b"add failed"),  # git add fails
         ]
 
@@ -871,10 +932,11 @@ class TestGitOperationGuard:
         coord._changed_files = ["file.yaml"]
 
         status_proc = _mock_process(returncode=0, stdout=b" M file.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=b"old: content")
         add_proc = _mock_process(returncode=1, stderr=b"git add failed")
 
         with patch("asyncio.create_subprocess_exec",
-                    side_effect=[status_proc, add_proc]):
+                    side_effect=[status_proc, show_proc, add_proc]):
             await coord.async_push()
 
         assert coord._git_operating is False
@@ -1165,6 +1227,103 @@ class TestMergeConflictDetection:
                             await coord.async_pull()
         
         mock_cleanup.assert_called_once_with(keep_path="/tmp/backup.json")
+
+
+# ---------------------------------------------------------------------------
+# Formatting-only commit suppression
+# ---------------------------------------------------------------------------
+
+class TestFormattingOnly:
+
+    @pytest.mark.asyncio
+    async def test_formatting_only_skips_commit(self, fake_hass, fake_entry):
+        """Push should skip commit when all YAML changes are formatting-only."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._changed_files = ["automations.yaml"]
+
+        yaml_content = "- id: '1'\n  alias: Test\n  trigger: []\n  action: []\n"
+
+        # git status returns changes, git show returns same semantic YAML
+        status_proc = _mock_process(returncode=0, stdout=b" M automations.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=yaml_content.encode())
+        checkout_proc = _mock_process(returncode=0)
+
+        # async_add_executor_job returns the same content (formatting identical for simplicity)
+        fake_hass.async_add_executor_job = AsyncMock(return_value=yaml_content)
+
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, show_proc, checkout_proc]):
+            await coord.async_push()
+
+        assert coord._status == STATUS_CLEAN
+        assert coord._changed_files == []
+        assert coord._last_activity == "Skipped formatting-only changes"
+
+    @pytest.mark.asyncio
+    async def test_real_change_proceeds_with_commit(self, fake_hass, fake_entry):
+        """Push should proceed when YAML changes include semantic differences."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._changed_files = ["automations.yaml"]
+
+        old_yaml = "- id: '1'\n  alias: Test\n  trigger: []\n  action: []\n"
+        new_yaml = "- id: '1'\n  alias: Updated\n  trigger: []\n  action: []\n"
+
+        status_proc = _mock_process(returncode=0, stdout=b" M automations.yaml\n")
+        show_proc = _mock_process(returncode=0, stdout=old_yaml.encode())
+        add_proc = _mock_process(returncode=0)
+        commit_proc = _mock_process(returncode=0)
+        rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
+        push_proc = _mock_process(returncode=0)
+
+        fake_hass.async_add_executor_job = AsyncMock(return_value=new_yaml)
+
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, show_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
+            await coord.async_push()
+
+        assert coord._status == STATUS_CLEAN
+        assert coord._last_push_commit == "abc1234"
+
+    @pytest.mark.asyncio
+    async def test_non_yaml_always_treated_as_real(self, fake_hass, fake_entry):
+        """Non-YAML files should always be treated as real changes."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._changed_files = ["README.md"]
+
+        status_proc = _mock_process(returncode=0, stdout=b" M README.md\n")
+        # No git show needed — _is_formatting_only returns False immediately for non-YAML
+        add_proc = _mock_process(returncode=0)
+        commit_proc = _mock_process(returncode=0)
+        rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
+        push_proc = _mock_process(returncode=0)
+
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
+            await coord.async_push()
+
+        assert coord._status == STATUS_CLEAN
+        assert coord._last_push_commit == "abc1234"
+
+    @pytest.mark.asyncio
+    async def test_new_yaml_file_treated_as_real(self, fake_hass, fake_entry):
+        """New YAML files (not in HEAD) should be treated as real changes."""
+        coord = _make_coordinator(fake_hass, fake_entry)
+        coord._changed_files = ["new_file.yaml"]
+
+        status_proc = _mock_process(returncode=0, stdout=b"?? new_file.yaml\n")
+        # git show fails for new file
+        show_proc = _mock_process(returncode=128, stderr=b"fatal: not in HEAD")
+        add_proc = _mock_process(returncode=0)
+        commit_proc = _mock_process(returncode=0)
+        rev_parse_proc = _mock_process(returncode=0, stdout=b"abc1234")
+        push_proc = _mock_process(returncode=0)
+
+        with patch("asyncio.create_subprocess_exec",
+                    side_effect=[status_proc, show_proc, add_proc, commit_proc, rev_parse_proc, push_proc]):
+            await coord.async_push()
+
+        assert coord._status == STATUS_CLEAN
+        assert coord._last_push_commit == "abc1234"
 
 
 

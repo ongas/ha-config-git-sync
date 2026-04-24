@@ -18,6 +18,7 @@ from .const import (
     CONF_COMMIT_AUTHOR_NAME,
     CONF_INIT_GIT,
     CONF_NOTIFICATION_COOLDOWN,
+    CONF_NOTIFY_SERVICE,
     CONF_REMOTE,
     CONF_REMOTE_CHECK_ENABLED,
     CONF_REPO_PATH,
@@ -27,6 +28,7 @@ from .const import (
     DEFAULT_COMMIT_AUTHOR_EMAIL,
     DEFAULT_COMMIT_AUTHOR_NAME,
     DEFAULT_NOTIFICATION_COOLDOWN,
+    DEFAULT_NOTIFY_SERVICE,
     DEFAULT_REMOTE,
     DEFAULT_REMOTE_CHECK_ENABLED,
     DEFAULT_REPO_PATH,
@@ -150,6 +152,9 @@ class HAConfigGitSyncConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_COMMIT_AUTHOR_EMAIL, default=DEFAULT_COMMIT_AUTHOR_EMAIL
                     ): str,
+                    vol.Optional(
+                        CONF_NOTIFY_SERVICE, default=DEFAULT_NOTIFY_SERVICE
+                    ): str,
                     vol.Required(
                         CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
                     ): vol.All(int, vol.Range(min=1, max=60)),
@@ -267,7 +272,7 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
             if not errors:
                 return self.async_create_entry(title="", data=user_input)
 
-        current = self.config_entry.data
+        current = {**self.config_entry.data, **self.config_entry.options}
 
         return self.async_show_form(
             step_id="init",
@@ -287,6 +292,12 @@ class HAConfigGitSyncOptionsFlow(OptionsFlow):
                         CONF_COMMIT_AUTHOR_EMAIL,
                         default=current.get(
                             CONF_COMMIT_AUTHOR_EMAIL, DEFAULT_COMMIT_AUTHOR_EMAIL
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_NOTIFY_SERVICE,
+                        default=current.get(
+                            CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICE
                         ),
                     ): str,
                     vol.Required(
