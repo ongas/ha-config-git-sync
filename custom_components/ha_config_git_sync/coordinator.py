@@ -321,13 +321,16 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             )
             subjects = [s for s in log_output.split("\n") if s.strip()]
 
+            # Set notified head BEFORE sending to prevent a concurrent
+            # poll/refresh from sending a duplicate notification
+            self._notified_remote_head = remote_head
+
             await self._send_pull_notification(
                 behind=behind,
                 ahead=ahead,
                 subjects=subjects,
                 has_local_changes=bool(self._changed_files),
             )
-            self._notified_remote_head = remote_head
 
         except asyncio.TimeoutError:
             self._last_remote_error = "fetch timed out"
