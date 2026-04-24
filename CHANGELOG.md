@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.13.1] — 2026-04-24
+
+### Changed
+
+- **README documentation** — Comprehensive update with all current features, including auto-sync capabilities, entity descriptions, workflows, and troubleshooting guides.
+
 ## [1.12.0] — 2026-04-24
 
 ### Added
