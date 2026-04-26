@@ -314,16 +314,17 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if remote_head == self._notified_remote_head:
                 return
 
+            # Set notified head BEFORE any further awaits to prevent a
+            # concurrent poll/refresh from sending a duplicate notification
+            # (the git log call below yields, creating a race window)
+            self._notified_remote_head = remote_head
+
             # Get commit subjects for the notification (max 5)
             _, log_output, _ = await self._run_git(
                 "log", "--oneline", f"HEAD..{upstream}",
                 "--format=%s", f"-{min(behind, 5)}"
             )
             subjects = [s for s in log_output.split("\n") if s.strip()]
-
-            # Set notified head BEFORE sending to prevent a concurrent
-            # poll/refresh from sending a duplicate notification
-            self._notified_remote_head = remote_head
 
             await self._send_pull_notification(
                 behind=behind,
