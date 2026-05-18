@@ -30,6 +30,7 @@ async def async_setup_entry(
     async_add_entities([
         GitSyncStatusSensor(coordinator, entry),
         GitSyncLastActivitySensor(coordinator, entry),
+        GitSyncValidationErrorSensor(coordinator, entry),
     ])
 
 
@@ -123,3 +124,34 @@ class GitSyncLastActivitySensor(CoordinatorEntity, SensorEntity):
     def icon(self) -> str:
         """Return icon."""
         return "mdi:history"
+
+
+class GitSyncValidationErrorSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing the last config validation error."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Validation Error"
+
+    def __init__(self, coordinator: GitSyncCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_validation_error"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "HA Config Git Sync",
+            "manufacturer": "ongas",
+            "model": "Git Sync",
+        }
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the last validation error, or None if no error."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("last_validation_error")
+        return None
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on whether there's an error."""
+        error = self.native_value
+        return "mdi:alert-circle" if error else "mdi:check-circle"

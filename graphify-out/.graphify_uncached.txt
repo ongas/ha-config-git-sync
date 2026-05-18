@@ -1,0 +1,17 @@
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/binary_sensor.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/button.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/config_flow.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/const.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/coordinator.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/sensor.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/switch.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/custom_components/ha_config_git_sync/__init__.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/tests/conftest.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/tests/test_config_flow.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/tests/test_coordinator_integration.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/tests/test_coordinator_unit.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/tests/__init__.py
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/CHANGELOG.md
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/README.md
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/RELEASE_PROCESS.md
+/mnt/e/source/personal_repos/homeassistant/custom_components/ha-config-git-sync/requirements_test.txt

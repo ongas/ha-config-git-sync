@@ -39,18 +39,28 @@ def _make_entry(repo_path: str) -> MagicMock:
 
 def _git(repo_path: str, *args: str) -> str:
     """Run a real git command in the repo and return stdout."""
+    # Check if this is a bare repository (has .git/config instead of .git directory)
+    is_bare = Path(repo_path).name.endswith(".git")
+    
+    # For bare repos with newer git versions (safe.bareRepository), add -c flag
+    cmd = ["git"]
+    if is_bare:
+        cmd.extend(["-c", "safe.bareRepository=all"])
+    cmd.extend(args)
+    
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@test.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@test.com",
+    }
     result = subprocess.run(
-        ["git", *args],
+        cmd,
         cwd=repo_path,
         capture_output=True,
         text=True,
-        env={
-            **os.environ,
-            "GIT_AUTHOR_NAME": "Test",
-            "GIT_AUTHOR_EMAIL": "test@test.com",
-            "GIT_COMMITTER_NAME": "Test",
-            "GIT_COMMITTER_EMAIL": "test@test.com",
-        },
+        env=env,
     )
     return result.stdout.strip()
 
@@ -169,12 +179,7 @@ class TestRealGitPush:
         assert coord._last_push_commit is not None
 
         # Verify the commit actually reached the bare remote
-        remote_log = subprocess.run(
-            ["git", "log", "--oneline", "-1", "main"],
-            cwd=remote,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        remote_log = _git(remote, "log", "--oneline", "-1", "main")
         assert "UI change:" in remote_log
 
     @pytest.mark.asyncio
@@ -203,12 +208,7 @@ class TestRealGitPush:
         assert coord._status == STATUS_CLEAN
 
         # Verify the file no longer exists in the remote
-        remote_files = subprocess.run(
-            ["git", "ls-tree", "--name-only", "main"],
-            cwd=remote,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        remote_files = _git(remote, "ls-tree", "--name-only", "main")
         assert "to_delete.yaml" not in remote_files
 
     @pytest.mark.asyncio
@@ -228,12 +228,7 @@ class TestRealGitPush:
         assert coord._status == STATUS_CLEAN
 
         # Verify file reached remote
-        remote_files = subprocess.run(
-            ["git", "ls-tree", "--name-only", "main"],
-            cwd=remote,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        remote_files = _git(remote, "ls-tree", "--name-only", "main")
         assert "secrets.yaml" in remote_files
 
     @pytest.mark.asyncio

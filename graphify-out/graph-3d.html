@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Graphify 3D</title>
+    <style>
+      body { margin: 0; overflow: hidden; }
+      #graph { width: 100vw; height: 100vh; }
+    </style>
+    <script src="https://unpkg.com/3d-force-graph"></script>
+  </head>
+  <body>
+    <div id="graph"></div>
+    <script>
+      fetch('graph.json')
+        .then(res => res.json())
+        .then(raw => {
+          // Adapt Graphify → 3d-force-graph format
+          const data = {
+            nodes: raw.nodes.map(n => ({
+              id: n.id,
+              label: n.label || n.name || n.id,
+              cluster: n.cluster
+            })),
+            links: raw.edges.map(e => ({
+              source: e.source,
+              target: e.target
+            }))
+          };
+
+          const Graph = ForceGraph3D()(document.getElementById('graph'))
+            .graphData(data)
+            .nodeLabel(node => node.label)
+            .nodeAutoColorBy('cluster')
+            .linkDirectionalParticles(2)
+            .linkDirectionalParticleSpeed(0.005);
+        });
+    </script>
+  </body>
+</html>

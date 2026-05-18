@@ -128,7 +128,12 @@ def fake_hass():
     hass = MagicMock()
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
-    hass.async_add_executor_job = AsyncMock()
+    
+    # Make async_add_executor_job actually execute the function with its args
+    async def mock_executor_job(func, *args, **kwargs):
+        return func(*args, **kwargs)
+    
+    hass.async_add_executor_job = AsyncMock(side_effect=mock_executor_job)
     hass.bus = MagicMock()
     hass.bus.async_listen = MagicMock(return_value=lambda: None)
     return hass
@@ -203,5 +208,12 @@ def git_repo(tmp_path):
     subprocess.run(["git", "push", "-u", "origin", "main"],
                     cwd=str(repo_path), check=True, capture_output=True,
                     env=env)
+
+    # For bare repos with newer git versions (safe.bareRepository), set HEAD
+    # so that refs can be queried later
+    subprocess.run(
+        ["git", "-c", "safe.bareRepository=all", "symbolic-ref", "HEAD", "refs/heads/main"],
+        cwd=str(remote_path), check=True, capture_output=True,
+    )
 
     return {"repo_path": str(repo_path), "remote_path": str(remote_path)}

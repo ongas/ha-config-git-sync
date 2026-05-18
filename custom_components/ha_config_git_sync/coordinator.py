@@ -90,6 +90,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._last_push: str | None = None
         self._last_push_commit: str | None = None
         self._last_error: str | None = None
+        self._last_validation_error: str | None = None
         self._git_available: bool = False
         self._observer: Observer | None = None
         self._debounce_handle: asyncio.TimerHandle | None = None
@@ -396,6 +397,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             "last_push": self._last_push,
             "last_push_commit": self._last_push_commit,
             "last_error": self._last_error,
+            "last_validation_error": self._last_validation_error,
             "last_check": dt_util.utcnow().isoformat(),
             "is_revert_head": self._is_revert_head,
             "last_activity": self._last_activity,
@@ -992,6 +994,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
                 self._status = STATUS_ERROR
                 self._last_error = f"Config invalid: {config_errors}"
+                self._last_validation_error = config_errors
                 self._last_activity = "Pull rejected: invalid config"
                 await self._notify_result(
                     "Git Pull Rejected — Config Invalid",
@@ -1000,6 +1003,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 )
                 return
 
+            self._last_validation_error = None
             self._update_progress(STATUS_VALIDATING, f"Config valid ({commit_hash}) ✓")
 
             # Also pull ha-config-git-sync custom integration if it exists
