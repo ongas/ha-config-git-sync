@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.16.1] — 2026-06-11
+
+### Fixed
+
+- Prevent duplicate persistent notifications when remote change checks overlap.
+
 ## [1.14.0] — 2026-04-24
 
 ### Added
