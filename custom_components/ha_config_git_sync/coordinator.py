@@ -110,6 +110,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         self._remote_head: str | None = None
         self._dismissed_remote_head: str | None = None
         self._notified_remote_head: str | None = None
+        self._remote_notification_in_flight: bool = False
         self._last_remote_check: str | None = None
         self._last_remote_error: str | None = None
 
@@ -255,7 +256,10 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             return
         if self._git_operating:
             return
+        if self._remote_notification_in_flight:
+            return
 
+        self._remote_notification_in_flight = True
         try:
             # Fetch with timeout to avoid blocking the poll cycle
             ssh_cmd = (
@@ -315,9 +319,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if remote_head == self._notified_remote_head:
                 return
 
-            # Set notified head BEFORE any further awaits to prevent a
-            # concurrent poll/refresh from sending a duplicate notification
-            # (the git log call below yields, creating a race window)
+            # Mark as notified BEFORE any further awaits to prevent a
+            # concurrent poll/refresh from sending a duplicate notification.
             self._notified_remote_head = remote_head
 
             # Get commit subjects for the notification (max 5)
@@ -340,6 +343,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Remote check failed", exc_info=True)
             self._last_remote_error = "unexpected error"
+        finally:
+            self._remote_notification_in_flight = False
 
     async def _send_pull_notification(
         self,
