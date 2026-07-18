@@ -94,7 +94,7 @@ class GitSyncRemoteUpdateSensor(CoordinatorEntity, BinarySensorEntity):
     @property
     def icon(self) -> str:
         """Return icon based on state."""
-        return "mdi:source-branch-pull" if self.is_on else "mdi:source-branch-check"
+        return "mdi:alert-circle" if self.is_on else "mdi:check-circle"
 
     @property
     def extra_state_attributes(self) -> dict:

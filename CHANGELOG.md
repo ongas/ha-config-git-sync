@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.16.2] — 2026-07-19
+
+### Changed
+
+- Updated `binary_sensor.ha_config_git_sync_remote_update_available` icon behavior: shows a warning icon when updates are available and a check icon when up to date.
+
 ## [1.16.1] — 2026-06-11
 
 ### Fixed
