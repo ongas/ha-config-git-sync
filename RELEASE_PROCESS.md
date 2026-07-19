@@ -1,10 +1,86 @@
 # Release Process
 
-This document outlines the critical steps for releasing new versions of the HA Config Git Sync integration. **Follow this checklist exactly to prevent deployment issues.**
+This document is structured to make one mistake hard to miss: **tag pushed but GitHub Release not published**.
 
-## Pre-Release Checklist (MUST DO BEFORE TAGGING)
+## Definition of Done (DoD)
 
-### 1. Update `manifest.json` Version ⚠️ CRITICAL
+A release is only complete when all of the following are true:
+
+- `manifest.json` version equals the release version
+- `CHANGELOG.md` contains the release entry
+- tag `vX.Y.Z` exists on origin
+- **GitHub Release for `vX.Y.Z` is published (not draft)**
+
+If the GitHub Release is not published, the release is **NOT done**.
+
+---
+
+## Release Workflow (Use This Order)
+
+### Phase 1 — Prepare
+
+1. Update `custom_components/ha_config_git_sync/manifest.json` version.
+2. Add release notes to `CHANGELOG.md`.
+3. Run full test suite:
+
+```bash
+pytest tests/ -v
+```
+
+4. Commit and push to `main`:
+
+```bash
+git add custom_components/ha_config_git_sync/manifest.json CHANGELOG.md
+git commit -m "Release vX.Y.Z"
+git push origin main
+```
+
+### Phase 2 — Tag
+
+Create and push the tag:
+
+```bash
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+### Phase 3 — Publish (MANDATORY)
+
+Create/publish the GitHub Release immediately after tagging:
+
+```bash
+gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <(sed -n '/^## \[X.Y.Z\]/,/^## \[/p' CHANGELOG.md | sed '$d')
+```
+
+If you prefer UI:
+
+1. Go to [Releases](https://github.com/ongas/ha-config-git-sync/releases)
+2. Click "Draft a new release"
+3. Select tag `vX.Y.Z`
+4. Paste release notes from `CHANGELOG.md`
+5. Click "Publish release"
+
+---
+
+## Hard Stop Verification (Required)
+
+Run these commands before saying release is done:
+
+```bash
+# 1) Tag points to correct manifest version
+git show vX.Y.Z:custom_components/ha_config_git_sync/manifest.json | grep '"version"'
+
+# 2) GitHub release exists and is published
+gh release view vX.Y.Z --json isDraft,isPrerelease,url
+```
+
+Expected for #2: `isDraft=false` and the URL is present.
+
+Do not mark a release complete until both checks pass.
+
+## Detailed Notes
+
+### 1. Update `manifest.json` Version ⚠️ Critical
 Before creating any release tag, the `manifest.json` file **MUST** be updated to match the version being released.
 
 **File:** `custom_components/ha_config_git_sync/manifest.json`
@@ -62,7 +138,7 @@ git commit -m "Release v1.9.2"
 git push origin main
 ```
 
-## Release Tag Creation (ONLY AFTER ABOVE STEPS)
+## Release Tag Creation (Only After Above Steps)
 
 Once the manifest is updated and committed, create the release tag:
 
@@ -83,7 +159,17 @@ Features:
 git push origin v1.9.2
 ```
 
-## GitHub Release (Manual)
+## GitHub Release (Mandatory)
+
+Use CLI or UI, but this step is mandatory.
+
+CLI:
+
+```bash
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "<paste changelog entry>"
+```
+
+UI:
 
 1. Go to [Releases](https://github.com/ongas/ha-config-git-sync/releases)
 2. Click "Draft a new release"
