@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.16.4] — 2026-07-19
+
+### Changed
+
+- Renamed `binary_sensor.ha_config_git_sync_pending_changes` display name from `Pending Changes` to `Local Pending Changes` to clarify that it represents local uncommitted changes only.
+
 ## [1.16.3] — 2026-07-19
 
 ### Fixed

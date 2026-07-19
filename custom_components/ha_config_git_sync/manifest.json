@@ -6,6 +6,6 @@
   "codeowners": ["@ongas"],
   "config_flow": true,
   "iot_class": "local_polling",
-  "version": "1.16.3",
+  "version": "1.16.4",
   "requirements": ["watchdog>=4.0"]
 }

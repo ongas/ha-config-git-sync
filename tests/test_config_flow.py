@@ -58,6 +58,18 @@ VALID_SETTINGS_INPUT = {
 }
 
 
+def _attach_mock_hass(flow: HAConfigGitSyncConfigFlow) -> HAConfigGitSyncConfigFlow:
+    """Attach minimal hass state needed for async_set_unique_id in tests."""
+    flow.hass = MagicMock()
+    flow.hass.config_entries = MagicMock()
+    flow.hass.config_entries.flow = MagicMock()
+    flow.hass.config_entries.flow.async_progress_by_handler = MagicMock(return_value=[])
+    flow.hass.config_entries.async_entry_for_domain_unique_id = MagicMock(return_value=None)
+    flow.flow_id = "test_flow_id"
+    flow.context = {}
+    return flow
+
+
 # ---------------------------------------------------------------------------
 # 1. Config flow — step_user
 # ---------------------------------------------------------------------------
@@ -165,7 +177,7 @@ class TestConfigFlowStepSettings:
     @pytest.mark.asyncio
     async def test_valid_input_creates_entry(self):
         """Valid settings should create a config entry."""
-        flow = HAConfigGitSyncConfigFlow()
+        flow = _attach_mock_hass(HAConfigGitSyncConfigFlow())
         flow._repo_data = {**VALID_REPO_INPUT, CONF_SSH_KEY_PATH: ""}
 
         result = await flow.async_step_settings(user_input=VALID_SETTINGS_INPUT)
@@ -180,7 +192,7 @@ class TestConfigFlowStepSettings:
     @pytest.mark.asyncio
     async def test_valid_input_with_existing_ssh_key(self):
         """SSH key exists on disk → entry created without error."""
-        flow = HAConfigGitSyncConfigFlow()
+        flow = _attach_mock_hass(HAConfigGitSyncConfigFlow())
         flow._repo_data = VALID_REPO_INPUT
 
         with patch("os.path.isfile", return_value=True):
@@ -191,12 +203,12 @@ class TestConfigFlowStepSettings:
     @pytest.mark.asyncio
     async def test_entry_gets_unique_id(self):
         """Config entry should use repo_path as unique_id."""
-        flow = HAConfigGitSyncConfigFlow()
+        flow = _attach_mock_hass(HAConfigGitSyncConfigFlow())
         flow._repo_data = {**VALID_REPO_INPUT, CONF_SSH_KEY_PATH: ""}
 
         await flow.async_step_settings(user_input=VALID_SETTINGS_INPUT)
 
-        assert flow._unique_id == "/config"
+        assert flow.unique_id == "/config"
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +358,7 @@ class TestConfigFlowEndToEnd:
     @pytest.mark.asyncio
     async def test_full_flow_user_to_entry(self):
         """Complete flow: step_user → step_settings → create_entry."""
-        flow = HAConfigGitSyncConfigFlow()
+        flow = _attach_mock_hass(HAConfigGitSyncConfigFlow())
 
         # Step 1: show form
         result = await flow.async_step_user(user_input=None)

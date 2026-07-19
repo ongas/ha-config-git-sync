@@ -30,7 +30,7 @@ class GitSyncPendingChangesSensor(CoordinatorEntity, BinarySensorEntity):
     """Binary sensor that is ON when there are uncommitted config changes."""
 
     _attr_has_entity_name = True
-    _attr_name = "Pending Changes"
+    _attr_name = "Local Pending Changes"
     _attr_device_class = BinarySensorDeviceClass.UPDATE
 
     def __init__(self, coordinator: GitSyncCoordinator, entry: ConfigEntry) -> None:
