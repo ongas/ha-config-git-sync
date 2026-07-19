@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.3] — 2026-07-19
+
+### Fixed
+
+- Prevent duplicate HA panel notifications when `notify_service` is set to `persistent_notification`.
+- Suppress same-cycle duplicate panel notifications when both local changes and remote updates are detected.
+
 ## [1.16.2] — 2026-07-19
 
 ### Changed

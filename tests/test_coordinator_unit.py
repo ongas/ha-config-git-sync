@@ -393,6 +393,28 @@ class TestNotifications:
         assert len(mobile_calls) == 0
 
     @pytest.mark.asyncio
+    async def test_no_mobile_notification_when_service_is_persistent_notification(
+        self, fake_hass, fake_entry
+    ):
+        """notify_service=persistent_notification should not create a duplicate panel notification."""
+        coord = _make_coordinator(
+            fake_hass, fake_entry, {"notify_service": "persistent_notification"}
+        )
+        coord._git_available = True
+        coord._last_notification = None
+
+        porcelain = b" M configuration.yaml\n"
+        proc = _mock_process(returncode=0, stdout=porcelain)
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            await coord._async_update_data()
+
+        calls = fake_hass.services.async_call.call_args_list
+        persistent_calls = [c for c in calls if c[0][0] == "persistent_notification"]
+        assert len(persistent_calls) >= 1
+        mobile_calls = [c for c in calls if c[0][0] == "notify"]
+        assert len(mobile_calls) == 0
+
+    @pytest.mark.asyncio
     async def test_mobile_notification_uses_tag(self, fake_hass, fake_entry):
         """Mobile notifications should include a tag to prevent stacking."""
         coord = _make_coordinator(fake_hass, fake_entry,
@@ -410,6 +432,35 @@ class TestNotifications:
         assert len(mobile_calls) >= 1
         payload = mobile_calls[0][0][2]
         assert payload["data"]["tag"] == "ha_git_sync_push"
+
+    @pytest.mark.asyncio
+    async def test_remote_notification_suppresses_local_duplicate(
+        self, fake_hass, fake_entry
+    ):
+        """When remote update notification is sent, skip local duplicate panel notification."""
+        coord = _make_coordinator(fake_hass, fake_entry, {"notify_service": ""})
+        coord._git_available = True
+        coord._last_notification = None
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=[
+                _mock_process(returncode=0, stdout=b" M configuration.yaml\n"),
+                _mock_process(returncode=0),
+                _mock_process(returncode=0, stdout=b"0\t1"),
+                _mock_process(returncode=0, stdout=b"def4567"),
+                _mock_process(returncode=0, stdout=b"Remote commit subject"),
+            ],
+        ):
+            await coord._async_update_data()
+
+        calls = fake_hass.services.async_call.call_args_list
+        persistent_calls = [
+            c for c in calls if c[0][0] == "persistent_notification" and c[0][1] == "create"
+        ]
+        assert len(persistent_calls) == 1
+        payload = persistent_calls[0][0][2]
+        assert payload["title"] == "Git Config Update Available"
 
     @pytest.mark.asyncio
     async def test_push_success_sends_result_notification(self, fake_hass, fake_entry):
@@ -1324,6 +1375,4 @@ class TestFormattingOnly:
 
         assert coord._status == STATUS_CLEAN
         assert coord._last_push_commit == "abc1234"
-
-
 

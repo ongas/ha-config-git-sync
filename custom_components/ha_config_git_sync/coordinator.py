@@ -205,6 +205,8 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 self._last_error = stderr
                 return self._build_data()
 
+            notify_local_changes = False
+
             if stdout:
                 files = []
                 for line in stdout.split("\n"):
@@ -223,7 +225,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                         )
                         await self.async_push()
                     else:
-                        await self._maybe_notify()
+                        notify_local_changes = True
             else:
                 self._changed_files = []
                 if self._status != STATUS_PUSHING:
@@ -235,7 +237,13 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                     await self._auto_push_ahead_commits()
 
             # Best-effort remote check — never fails the coordinator
-            await self._check_remote_changes()
+            remote_notification_sent = await self._check_remote_changes()
+
+            # Avoid duplicate panel notifications: when a remote update
+            # notification was just sent, skip the local-change notification
+            # for this same poll cycle.
+            if notify_local_changes and not remote_notification_sent:
+                await self._maybe_notify()
 
             return self._build_data()
 
@@ -244,7 +252,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             self._last_error = str(err)
             raise UpdateFailed(f"Git status check failed: {err}") from err
 
-    async def _check_remote_changes(self) -> None:
+    async def _check_remote_changes(self) -> bool:
         """Fetch from remote and check for new commits (best-effort).
 
         Detects whether we are behind, ahead, or diverged from the remote
@@ -253,11 +261,11 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         to avoid re-notifying for already-dismissed commits.
         """
         if not self._remote_check_enabled or not self._ssh_key_path:
-            return
+            return False
         if self._git_operating:
-            return
+            return False
         if self._remote_notification_in_flight:
-            return
+            return False
 
         self._remote_notification_in_flight = True
         try:
@@ -276,7 +284,7 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if rc != 0:
                 self._last_remote_error = f"fetch failed: {stderr}"
                 _LOGGER.debug("Remote fetch failed: %s", stderr)
-                return
+                return False
 
             # Detect ahead/behind using left-right rev-list
             # Format: "<ahead>\t<behind>" relative to upstream
@@ -287,12 +295,12 @@ class GitSyncCoordinator(DataUpdateCoordinator):
             if rc != 0:
                 self._last_remote_error = f"rev-list failed: {stderr}"
                 _LOGGER.debug("Remote rev-list failed: %s", stderr)
-                return
+                return False
 
             parts = stdout.strip().split()
             if len(parts) != 2:
                 self._last_remote_error = f"unexpected rev-list output: {stdout}"
-                return
+                return False
 
             ahead = int(parts[0])
             behind = int(parts[1])
@@ -311,13 +319,13 @@ class GitSyncCoordinator(DataUpdateCoordinator):
 
             if behind == 0:
                 # Up to date (or only ahead) — nothing to notify
-                return
+                return False
 
             # We are behind. Check if already notified or dismissed.
             if remote_head == self._dismissed_remote_head:
-                return
+                return False
             if remote_head == self._notified_remote_head:
-                return
+                return False
 
             # Mark as notified BEFORE any further awaits to prevent a
             # concurrent poll/refresh from sending a duplicate notification.
@@ -336,13 +344,16 @@ class GitSyncCoordinator(DataUpdateCoordinator):
                 subjects=subjects,
                 has_local_changes=bool(self._changed_files),
             )
+            return True
 
         except asyncio.TimeoutError:
             self._last_remote_error = "fetch timed out"
             _LOGGER.debug("Remote fetch timed out after %ds", REMOTE_FETCH_TIMEOUT)
+            return False
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Remote check failed", exc_info=True)
             self._last_remote_error = "unexpected error"
+            return False
         finally:
             self._remote_notification_in_flight = False
 
@@ -1246,6 +1257,15 @@ class GitSyncCoordinator(DataUpdateCoordinator):
         service_name = self._notify_service
         if service_name.startswith("notify."):
             service_name = service_name[len("notify."):]
+
+        # Prevent duplicate panel notifications when users set
+        # notify_service to persistent_notification.
+        if service_name == "persistent_notification":
+            _LOGGER.warning(
+                "Notify service 'persistent_notification' sends panel notifications "
+                "and duplicates the integration's built-in panel alerts; skipping mobile notification"
+            )
+            return
 
         # Validate the service exists before calling
         if not self.hass.services.has_service("notify", service_name):
